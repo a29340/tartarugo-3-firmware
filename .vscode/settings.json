@@ -1,0 +1,18 @@
+{
+    "files.associations": {
+        "array": "cpp",
+        "limits": "cpp",
+        "type_traits": "cpp",
+        "numeric": "cpp",
+        "fstream": "cpp",
+        "istream": "cpp",
+        "ostream": "cpp",
+        "system_error": "cpp",
+        "regex": "cpp",
+        "typeinfo": "cpp",
+        "chrono": "cpp",
+        "condition_variable": "cpp",
+        "mutex": "cpp",
+        "thread": "cpp"
+    }
+}
