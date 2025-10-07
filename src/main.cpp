@@ -1,4 +1,3 @@
-#include <AccelStepper.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
@@ -14,6 +13,9 @@
 #include "NimBLEBeacon.h"
 #include "NimBLEEddystoneTLM.h"
 #include "esp_camera.h"
+#include "motor-utils.h"
+#include "time-utils.h"
+#include "stream-utils.h"
 
 portMUX_TYPE rssiMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -45,16 +47,10 @@ Preferences prefs;
 // Time settings
 
 const char *ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 3600;      // adjust to your timezone
-const int daylightOffset_sec = 3600;  // adjust for DST
+constexpr long gmtOffset_sec = 3600;      // adjust to your timezone
+constexpr int daylightOffset_sec = 3600;  // adjust for DST
 
-struct tm timeinfo;
-boolean timeIsSet = false;
-struct tm lastFeedTime;
-long lastFeedAmount = 0;
-struct tm lastStartTime;
-
-// WIFI and server config
+// WiFi and server config
 
 bool isConnected = false;
 bool isServerInitialized = false;
@@ -75,22 +71,9 @@ int closeBeaconThresholdRSSI = -73;
 
 NimBLEScan *pBLEScan;
 // Servo PIN
-const int servoPIN = 12;
-const int SERVO_DURATION_TOLERANCE_MS = 4000;
-const int FLASH_PIN = 4;
-Servo lidServo;
-// Stepper PIN
-const int stepPIN1 = 13;
-const int stepPIN2 = 14;
-const int stepPIN3 = 15;
-const int stepPIN4 = 2;
-AccelStepper stepper(AccelStepper::FULL4WIRE, stepPIN1, stepPIN3, stepPIN2,
-                     stepPIN4);
+constexpr int FLASH_PIN = 4;
 
-bool lidOpen = false;
-bool lidOverride = false;
-int openAngle = 185;
-int closedAngle = 78;
+
 
 // === RSSI smoothing ===
 #define RSSI_SAMPLES 8
@@ -112,90 +95,16 @@ bool bufferFilled[CATS_MAX_SIZE];
 int rssiIndexes[CATS_MAX_SIZE];
 int lastAvgRSSI[CATS_MAX_SIZE];
 
-int feedingCat = 0;
 
-// === Timeout setup ===
-unsigned long lastSeenTarget = 0;
-unsigned long lastSeenOther = 0;
-const unsigned int bufferTimeout = 10000;
-unsigned long lastOpen = 0;
-const unsigned int minOpenTime = 5000;
-
-struct ScheduleItem {
-    uint8_t hour;
-    uint8_t minute;
-    uint16_t amount;
-};
 
 #define SCHEDULE_MAX_SIZE 10
 ScheduleItem schedule[SCHEDULE_MAX_SIZE];
 unsigned int scheduleSize = 0;
 
-struct SmoothServo {
-    Servo *servo;
-    int from;
-    int to;
-    int steps;
-    int duration;
-    unsigned long startTime;
-    bool active;
-} lidMotion;
 
-void startSmoothMove(Servo &servo, int from, int to, int steps, int duration) {
-    lidMotion.servo = &servo;
-    lidMotion.from = from;
-    lidMotion.to = to;
-    lidMotion.steps = steps;
-    lidMotion.duration = duration;
-    lidMotion.startTime = millis();
-    lidMotion.active = true;
-    lidMotion.servo->attach(servoPIN, 500, 2400);
-}
-
-void updateSmoothMove() {
-    if (!lidMotion.active) return;
-
-    unsigned long now = millis();
-    unsigned long elapsed = now - lidMotion.startTime;
-
-    if (elapsed >=
-        ((unsigned long)lidMotion.duration + SERVO_DURATION_TOLERANCE_MS)) {
-        lidMotion.servo->detach();
-        lidMotion.active = false;
-        return;
-    }
-
-    if (elapsed >= (unsigned long)lidMotion.duration) {
-        lidMotion.servo->write(lidMotion.to);  // final angle
-        return;
-    }
-
-    float progress = (float)elapsed / lidMotion.duration;  // 0..1
-    // cosine ease-in/out
-    float factor = (1 - cos(progress * PI)) / 2;
-    int angle = lidMotion.from + (lidMotion.to - lidMotion.from) * factor;
-
-    lidMotion.servo->write(angle);
-}
-
-void openLid() {
-    if (!lidOpen) {
-        startSmoothMove(lidServo, closedAngle, openAngle, 50, 1000);
-    }
-    lidOpen = true;
-    lastOpen = millis();
-    Serial.println("Open lid!");
-}
-
-void closeLid() {
-    if (lidOpen) {
-        startSmoothMove(lidServo, openAngle, closedAngle, 100, 1000);
-    }
-    lidOpen = false;
-    Serial.println("Close lid!");
-}
 
 void saveLastFeed() {
+    getLocalTime(&lastFeedTime);
     // Convert struct tm → time_t
     time_t t = mktime(&lastFeedTime);
     prefs.begin("catfeeder", false);
@@ -218,14 +127,7 @@ void saveSettings() {
     prefs.end();
 }
 
-void feedAmount(int amount) {
-    stepper.setCurrentPosition(0);
-    stepper.moveTo(amount);
-    stepper.enableOutputs();
-    getLocalTime(&lastFeedTime);
-    lastFeedAmount = amount;
-    saveLastFeed();
-}
+
 
 int averageRSSI(int ci, int rssi) {
     portENTER_CRITICAL(&rssiMux);
@@ -245,16 +147,11 @@ int averageRSSI(int ci, int rssi) {
     return sum / count;
 }
 
-String printDateTime(tm *dateTime) {
-    // 2015-03-25T12:00:00Z
-    char buffer[26];
-    strftime(buffer, sizeof(buffer), "%Y-%m-%dT%X", dateTime);
-    return String(buffer);
-}
+
 
 String getStatus() {
     JsonDocument doc;
-    JsonObject status = doc.to<JsonObject>();
+    const JsonObject status = doc.to<JsonObject>();
     status["wifiSignal"] = WiFi.RSSI();
     status["isLidOpen"] = lidOpen;
     status["isAutoMode"] = !lidOverride;
@@ -263,7 +160,7 @@ String getStatus() {
     status["lastFeedAmount"] = lastFeedAmount;
     status["lastStartupTime"] =
         timeIsSet ? printDateTime(&lastStartTime).c_str() : "unknown";
-    JsonArray catsJson = status["cats"].to<JsonArray>();
+    const JsonArray catsJson = status["cats"].to<JsonArray>();
 
     for (size_t i = 0; i < catsSize; i++) {
         JsonObject cat = catsJson.add<JsonObject>();
@@ -304,12 +201,12 @@ String getStatusProm() {
 
 class scanCallbacks : public NimBLEScanCallbacks {
     void onResult(const NimBLEAdvertisedDevice *advertisedDevice) override {
-        std::string mac = advertisedDevice->getAddress().toString();
+        const std::string mac = advertisedDevice->getAddress().toString();
         // update RSSI
         for (size_t ci = 0; ci < catsSize; ci++) {
-            CatItem cat = cats[ci];
+            const CatItem cat = cats[ci];
             if (strcmp(mac.c_str(), cat.mac) == 0) {
-                int rssi = advertisedDevice->getRSSI();
+                const int rssi = advertisedDevice->getRSSI();
                 // Serial.printf("RSSI: %d\n", rssi);
                 lastAvgRSSI[ci] = averageRSSI(ci, rssi);
                 // pBLEScan->clearResults();
@@ -317,74 +214,6 @@ class scanCallbacks : public NimBLEScanCallbacks {
         }
     }
 } scanCallbacks;
-
-void addCORSHeaders(AsyncWebServerResponse *response) {
-    response->addHeader("Access-Control-Allow-Origin", "*");
-    response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-}
-
-static const char *_STREAM_CONTENT_TYPE =
-    "multipart/x-mixed-replace;boundary=frame";
-static const char *_STREAM_BOUNDARY = "\r\n--frame\r\n";
-static const char *_STREAM_PART =
-    "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
-
-class AsyncJpegStreamResponse : public AsyncAbstractResponse {
-   private:
-    camera_fb_t *fb;
-    unsigned long lastFrame;
-
-   public:
-    AsyncJpegStreamResponse() {
-        _callback = nullptr;
-        _code = 200;
-        _contentType = _STREAM_CONTENT_TYPE;
-        _sendContentLength = false;
-        _chunked = true;
-        fb = nullptr;
-        lastFrame = 0;
-    }
-    ~AsyncJpegStreamResponse() {
-        if (fb) esp_camera_fb_return(fb);
-    }
-    bool _sourceValid() const override { return true; }
-
-    size_t _fillBuffer(uint8_t *buf, size_t maxLen) override {
-        // throttle frame rate a little if needed
-        if (millis() - lastFrame < 100) {
-            return RESPONSE_TRY_AGAIN;  // ask AsyncWebServer to try again
-        }
-        lastFrame = millis();
-
-        fb = esp_camera_fb_get();
-        if (!fb) {
-            return RESPONSE_TRY_AGAIN;
-        }
-
-        // build the multipart headers
-        char part[64];
-        size_t len = snprintf(part, 64, _STREAM_PART, fb->len);
-        size_t headerLen = strlen(_STREAM_BOUNDARY) + len;
-
-        if (headerLen + fb->len > maxLen) {
-            // too big for buffer → release frame and retry
-            esp_camera_fb_return(fb);
-            fb = nullptr;
-            return RESPONSE_TRY_AGAIN;
-        }
-
-        memcpy(buf, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
-        memcpy(buf + strlen(_STREAM_BOUNDARY), part, len);
-        memcpy(buf + headerLen, fb->buf, fb->len);
-
-        size_t total = headerLen + fb->len;
-        esp_camera_fb_return(fb);
-        fb = nullptr;
-
-        return total;
-    }
-};
 
 void initialiseWebServer() {
     Serial.println("Initializing WebServer");
@@ -433,6 +262,7 @@ void initialiseWebServer() {
             request->getParam("amount", false, false);
         int amount = amountParam->value().toInt();
         feedAmount(amount);
+        saveLastFeed();
         request->send(200, "application/json", getStatus());
     });
     server.on(
@@ -543,130 +373,28 @@ void initialiseWebServer() {
 
     // MJPEG stream
     server.on("/api/stream", HTTP_GET, [](AsyncWebServerRequest *request) {
-        // AsyncWebServerResponse *response = request->beginResponse(
-        //     STREAM_CONTENT_TYPE, 0,
-        //     [](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-        //         camera_fb_t *fb = esp_camera_fb_get();
-        //         if (!fb) {
-        //             return 0;
-        //         }
-
-        //         // Header for frame
-        //         char part_buf[64];
-        //         size_t header_len =
-        //             snprintf(part_buf, 64, STREAM_PART, fb->len);
-
-        //         // Total size needed
-        //         size_t total_len =
-        //             strlen(STREAM_BOUNDARY) + header_len + fb->len;
-
-        //         if (maxLen < total_len) {
-        //             esp_camera_fb_return(fb);
-        //             return 0;
-        //         }
-
-        //         // Copy boundary
-        //         memcpy(buffer, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
-        //         size_t used = strlen(STREAM_BOUNDARY);
-
-        //         // Copy headers
-        //         memcpy(buffer + used, part_buf, header_len);
-        //         used += header_len;
-
-        //         // Copy JPEG data
-        //         memcpy(buffer + used, fb->buf, fb->len);
-        //         used += fb->len;
-
-        //         esp_camera_fb_return(fb);
-        //         return used;
-        //     });
-
-        // response->addHeader("Access-Control-Allow-Origin", "*");
-        // request->send(response);
-        AsyncClient *client = request->client();
-
-        // Write HTTP header
-        String header = "HTTP/1.1 200 OK\r\n";
-        header += "Content-Type: ";
-        header += _STREAM_CONTENT_TYPE;
-        header += "\r\n\r\n";
-        client->write(header.c_str(), header.length());
-
-        // Spawn a FreeRTOS task to continuously push frames
-        xTaskCreatePinnedToCore(
-            [](void *param) {
-                AsyncClient *client = (AsyncClient *)param;
-
-                while (client->connected()) {
-                    camera_fb_t *fb = esp_camera_fb_get();
-                    if (!fb) {
-                        vTaskDelay(10 / portTICK_PERIOD_MS);
-                        continue;
-                    }
-                    if (client->space() > 64) {
-                        client->write(_STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
-                        char part[64];
-                        size_t len = snprintf(part, 64, _STREAM_PART, fb->len);
-                        client->write(part, len);
-                        size_t toWrite = fb->len;
-                        size_t written = 0;
-
-                        // Serial.printf("fb size: %d - client buf space: %d\n", fb->len, client->space());
-                        while (toWrite > 0 && client->connected()) {
-                            size_t space = client->space();
-                            size_t chunk_size = toWrite > space ? space : toWrite;
-                            size_t sent = client->write((const char *)fb->buf + written, chunk_size);
-                            toWrite -= sent;
-                            while (client->space() <= 2 && client->connected()) {
-                                // Serial.printf("waiting for client space: %d\n", client->space());
-                                vTaskDelay(50 / portTICK_PERIOD_MS);
-                            }
-                        }
-                        client->write("\r\n", 2);
-                        // } else {
-                        // Serial.printf("client buffer has no room: \n client
-                        // buffer: %d\n frame buffer: %dn", client->space(),
-                        // fb->len);
-                        // }
-    
-                        esp_camera_fb_return(fb);
-                        // Yield to watchdog and WiFi
-                        vTaskDelay(100 / portTICK_PERIOD_MS);  // ~20 fps cap
-                    }
-                }
-
-                client->close();
-                vTaskDelete(NULL);
-            },
-            "streamTask", 16384, client, 1, NULL, 1);  // larger stack
+        handleStream(request);
     });
     server.begin();
 }
 
 void loadSettings() {
     prefs.begin("catfeeder", true);
-    time_t t = (time_t)prefs.getLong64("lastFeed", 0);
+    const time_t t = static_cast<time_t>(prefs.getLong64("lastFeed", 0));
     if (t != 0) {
         localtime_r(&t, &lastFeedTime);
     }
     lastFeedAmount = prefs.getLong("lastFeedAmount", 0);
-    size_t len = prefs.getBytes("schedule", &schedule,
-                                SCHEDULE_MAX_SIZE * sizeof(ScheduleItem));
+    const size_t len = prefs.getBytes("schedule", &schedule, SCHEDULE_MAX_SIZE * sizeof(ScheduleItem));
     scheduleSize = len / sizeof(ScheduleItem);
     for (int i = 0; i < scheduleSize; i++) {
-        Serial.printf("Scheduled feeding: %d:%d amount: %d\n", schedule[i].hour,
-                      schedule[i].minute, schedule[i].amount);
+        Serial.printf("Scheduled feeding: %d:%d amount: %d\n", schedule[i].hour, schedule[i].minute, schedule[i].amount);
     }
-    openBeaconThresholdRSSI =
-        prefs.getInt("openBeaconRSSI", openBeaconThresholdRSSI);
-    closeBeaconThresholdRSSI =
-        prefs.getInt("closeBeaconRSSI", closeBeaconThresholdRSSI);
+    openBeaconThresholdRSSI = prefs.getInt("openBeaconRSSI", openBeaconThresholdRSSI);
+    closeBeaconThresholdRSSI = prefs.getInt("closeBeaconRSSI", closeBeaconThresholdRSSI);
+    Serial.printf("Configured thresholds - open %d - close: %d \n", openBeaconThresholdRSSI, closeBeaconThresholdRSSI);
 
-    Serial.printf("Configured threasholds - open %d - close: %d \n",
-                  openBeaconThresholdRSSI, closeBeaconThresholdRSSI);
-
-    size_t len2 =
-        prefs.getBytes("cats", &cats, CATS_MAX_SIZE * sizeof(CatItem));
+    const size_t len2 = prefs.getBytes("cats", &cats, CATS_MAX_SIZE * sizeof(CatItem));
     catsSize = len2 / sizeof(CatItem);
 
     for (size_t i = 0; i < catsSize; i++) {
@@ -708,7 +436,7 @@ void setup() {
     config.pixel_format = PIXFORMAT_JPEG;  // for streaming
     // config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
     config.fb_location = CAMERA_FB_IN_PSRAM;
-    config.jpeg_quality = 13;
+    config.jpeg_quality = 30;
     config.fb_count = 4;
     config.grab_mode = CAMERA_GRAB_LATEST;
 
@@ -728,13 +456,7 @@ void setup() {
 
     loadSettings();
 
-    // Init servo
-    ESP32PWM::allocateTimer(0);
-    ESP32PWM::allocateTimer(1);
-    ESP32PWM::allocateTimer(2);
-    ESP32PWM::allocateTimer(3);
-
-    lidServo.setPeriodHertz(50);  // standard 50 Hz servo
+    setupMotors();
 
     // Init BLE
     NimBLEDevice::init("Beacon-scanner");
@@ -747,14 +469,10 @@ void setup() {
     pBLEScan->start(0, false, true);
     Serial.println("BLE scanning started...");
 
-    // Init stepper
-    stepper.setMaxSpeed(400);
-    stepper.setAcceleration(800);
-
     // Init time
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
 
-    // Setup WIFI
+    // Setup WiFi
     Serial.print("Init WiFi");
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password);
@@ -805,14 +523,14 @@ void afterWifiConnected() {
 }
 
 void periodic() {
-    unsigned long now = millis();
+    const unsigned long now = millis();
     if (now - lastLog > printPeriodicLog) {
-        wl_status_t wifiStatus = WiFi.status();
+        const wl_status_t wifiStatus = WiFi.status();
         isConnected = wifiStatus == WL_CONNECTED;
         if (isConnected) {
             if (!isServerInitialized) {
                 afterWifiConnected();
-                Serial.printf("Address: %s\n", WiFi.localIP().toString());
+                Serial.printf("Address: %s\n", WiFi.localIP().toString().c_str());
             }
             if (!timeIsSet && getLocalTime(&timeinfo)) {
                 Serial.println("Acquired NTP time");
@@ -869,6 +587,7 @@ void runSchedule() {
                 schedule[i].minute == nowTm.tm_min && nowTm.tm_sec == 0) {
                 Serial.printf("Feeding time! %d\n", schedule[i].amount);
                 feedAmount(schedule[i].amount);
+                saveLastFeed();
                 delay(2000);
             }
         }
