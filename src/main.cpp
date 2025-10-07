@@ -54,8 +54,9 @@ constexpr int daylightOffset_sec = 3600;  // adjust for DST
 
 bool isConnected = false;
 bool isServerInitialized = false;
-unsigned long lastLog = 0;
-unsigned long printPeriodicLog = 5000;
+unsigned long lastExecution = 0;
+unsigned long period = 250;
+
 const char *wifiStatusName[] = {"WL_IDLE_STATUS",    "WL_NO_SSID_AVAIL",
                                 "WL_SCAN_COMPLETED", "WL_CONNECTED",
                                 "WL_CONNECT_FAILED", "WL_CONNECTION_LOST",
@@ -522,25 +523,22 @@ void afterWifiConnected() {
     isServerInitialized = true;
 }
 
-void periodic() {
-    const unsigned long now = millis();
-    if (now - lastLog > printPeriodicLog) {
-        const wl_status_t wifiStatus = WiFi.status();
-        isConnected = wifiStatus == WL_CONNECTED;
-        if (isConnected) {
-            if (!isServerInitialized) {
-                afterWifiConnected();
-                Serial.printf("Address: %s\n", WiFi.localIP().toString().c_str());
-            }
-            if (!timeIsSet && getLocalTime(&timeinfo)) {
-                Serial.println("Acquired NTP time");
-                getLocalTime(&lastStartTime);
-                timeIsSet = true;
-            }
-        } else {
-            Serial.printf("Wifi status: %s\n", wifiStatusName[wifiStatus]);
+void checkWiFiAndPrint()
+{
+    const wl_status_t wifiStatus = WiFi.status();
+    isConnected = wifiStatus == WL_CONNECTED;
+    if (isConnected) {
+        if (!isServerInitialized) {
+            afterWifiConnected();
+            Serial.printf("Address: %s\n", WiFi.localIP().toString().c_str());
         }
-        lastLog = now;
+        if (!timeIsSet && getLocalTime(&timeinfo)) {
+            Serial.println("Acquired NTP time");
+            getLocalTime(&lastStartTime);
+            timeIsSet = true;
+        }
+    } else {
+        Serial.printf("Wifi status: %s\n", wifiStatusName[wifiStatus]);
     }
 }
 
@@ -561,21 +559,28 @@ void checkLid(unsigned long now) {
     }
 
     if (!lidOverride && !lidMotion.active) {
-        bool targetCatIsClose = targetBiggerRSSI > openBeaconThresholdRSSI;
-        bool targetCatIsNotClose =
-            !targetCatIsClose && targetBiggerRSSI < closeBeaconThresholdRSSI;
-        bool anotherCatIsCloserThanTarget =
-            otherCatBiggerRSSI > openBeaconThresholdRSSI &&
-            otherCatBiggerRSSI > targetBiggerRSSI;
+        const bool targetCatIsClose = targetBiggerRSSI > openBeaconThresholdRSSI;
+        const bool targetCatIsNotClose = targetBiggerRSSI < closeBeaconThresholdRSSI;
+        const bool anotherCatIsCloserThanTarget = otherCatBiggerRSSI > openBeaconThresholdRSSI && otherCatBiggerRSSI > targetBiggerRSSI;
 
         if ((targetCatIsNotClose || anotherCatIsCloserThanTarget) &&
             ((now - lastOpen) >= 3000) && lidOpen) {
             closeLid();
+            return;
         }
 
-        if (targetCatIsClose && !lidOpen) {
+        if (targetCatIsClose && !anotherCatIsCloserThanTarget && !lidOpen) {
             openLid();
         }
+    }
+}
+
+void periodic() {
+    const unsigned long now = millis();
+    if (now - lastExecution > period) {
+        checkWiFiAndPrint();
+        checkLid(now);
+        lastExecution = now;
     }
 }
 
@@ -602,17 +607,13 @@ void updateStepper() {
 }
 
 void loop() {
-    unsigned long now = millis();
+    periodic();
 
     // Update servo
-    periodic();
     updateSmoothMove();
 
     // Update stepper
     updateStepper();
-
-    // Lid should be open or closed?
-    checkLid(now);
 
     // Check schedule
     runSchedule();
