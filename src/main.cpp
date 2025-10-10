@@ -56,6 +56,8 @@ bool isConnected = false;
 bool isServerInitialized = false;
 unsigned long lastExecution = 0;
 unsigned long period = 250;
+int8_t wifiOffCounter = 0;
+int8_t healthCounter = 0;
 
 const char *wifiStatusName[] = {"WL_IDLE_STATUS",    "WL_NO_SSID_AVAIL",
                                 "WL_SCAN_COMPLETED", "WL_CONNECTED",
@@ -251,6 +253,7 @@ void initialiseWebServer() {
               [](AsyncWebServerRequest *request) {
                   AsyncWebServerResponse *response = request->beginResponse(
                       200, "application/json", getStatusProm());
+                  healthCounter = 0;
                   request->send(response);
               });
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -539,6 +542,12 @@ void checkWiFiAndPrint()
         }
     } else {
         Serial.printf("Wifi status: %s\n", wifiStatusName[wifiStatus]);
+        wifiOffCounter++;
+        // reconnect after 5 seconds of off time
+        if (wifiOffCounter >= 20)
+        {
+            ESP.restart();
+        }
     }
 }
 
@@ -575,11 +584,20 @@ void checkLid(unsigned long now) {
     }
 }
 
+void checkHealth() {
+    healthCounter++;
+    if (healthCounter >= 20)
+    {
+        ESP.restart();
+    }
+}
+
 void periodic() {
     const unsigned long now = millis();
     if (now - lastExecution > period) {
         checkWiFiAndPrint();
         checkLid(now);
+        checkHealth();
         lastExecution = now;
     }
 }
