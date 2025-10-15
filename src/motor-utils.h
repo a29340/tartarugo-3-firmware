@@ -1,8 +1,6 @@
 #include <ESP32Servo.h>
 #include <AccelStepper.h>
 
-constexpr int servoPIN = 12;
-constexpr int SERVO_DURATION_TOLERANCE_MS = 4000;
 
 bool lidOpen = false;
 bool lidOverride = false;
@@ -11,13 +9,10 @@ int closedAngle = 78;
 unsigned long lastOpen = 0;
 long lastFeedAmount = 0;
 
-
+// Servo
 Servo lidServo;
-// Stepper PIN
-constexpr int stepPIN1 = 13;
-constexpr int stepPIN2 = 14;
-constexpr int stepPIN3 = 15;
-constexpr int stepPIN4 = 2;
+constexpr int servoPIN = 12;
+constexpr int SERVO_DURATION_TOLERANCE_MS = 4000;
 
 struct SmoothServo
 {
@@ -29,8 +24,6 @@ struct SmoothServo
     unsigned long startTime;
     bool active;
 } lidMotion;
-
-AccelStepper stepper(AccelStepper::FULL4WIRE, stepPIN1, stepPIN3, stepPIN2, stepPIN4);
 
 void startSmoothMove(Servo& servo, int from, int to, int steps, int duration)
 {
@@ -94,13 +87,16 @@ void closeLid()
     Serial.println("Close lid!");
 }
 
-void feedAmount(int amount)
-{
-    stepper.setCurrentPosition(0);
-    stepper.moveTo(amount);
-    stepper.enableOutputs();
-    lastFeedAmount = amount;
-}
+// Stepper
+constexpr int stepPIN1 = 13;
+constexpr int stepPIN2 = 14;
+constexpr int stepPIN3 = 15;
+constexpr int stepPIN4 = 2;
+AccelStepper stepper(AccelStepper::FULL4WIRE, stepPIN1, stepPIN3, stepPIN2, stepPIN4);
+
+constexpr int MAX_MOVEMENTS = 5;
+long feedMovements[MAX_MOVEMENTS] = {-500, 500, -1000, 1000, 0};
+int feedMovementIndex = 0;
 
 void setupMotors()
 {
@@ -115,4 +111,26 @@ void setupMotors()
     // Init stepper
     stepper.setMaxSpeed(400);
     stepper.setAcceleration(800);
+}
+
+void feedAmount(const int amount)
+{
+    feedMovements[MAX_MOVEMENTS - 1] = amount;
+    feedMovementIndex = 0;
+    stepper.setCurrentPosition(0);
+    stepper.moveTo(feedMovements[0]);
+    stepper.enableOutputs();
+    lastFeedAmount = amount;
+}
+
+void updateStepper() {
+    stepper.run();
+    if (stepper.distanceToGo() == 0) {
+        if (feedMovementIndex >= MAX_MOVEMENTS) {
+            stepper.disableOutputs();
+        } else {
+            feedMovementIndex++;
+            stepper.moveTo(feedMovements[feedMovementIndex]);
+        }
+    }
 }

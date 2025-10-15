@@ -617,12 +617,7 @@ void runSchedule() {
     }
 }
 
-void updateStepper() {
-    stepper.run();
-    if (stepper.distanceToGo() == 0) {
-        stepper.disableOutputs();
-    }
-}
+
 
 void loop() {
     periodic();
