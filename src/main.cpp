@@ -97,6 +97,7 @@ int rssiBuffers[CATS_MAX_SIZE][RSSI_SAMPLES];
 bool bufferFilled[CATS_MAX_SIZE];
 int rssiIndexes[CATS_MAX_SIZE];
 int lastAvgRSSI[CATS_MAX_SIZE];
+int lastSeenTimestamp[CATS_MAX_SIZE];
 
 
 
@@ -146,6 +147,7 @@ int averageRSSI(int ci, int rssi) {
     }
     long sum = 0;
     for (int i = 0; i < count; i++) sum += rssiBuffers[ci][i];
+    lastSeenTimestamp[ci] = millis();
     portEXIT_CRITICAL(&rssiMux);
     return sum / count;
 }
@@ -166,11 +168,12 @@ String getStatus() {
     const JsonArray catsJson = status["cats"].to<JsonArray>();
 
     for (size_t i = 0; i < catsSize; i++) {
-        JsonObject cat = catsJson.add<JsonObject>();
+        auto cat = catsJson.add<JsonObject>();
         cat["name"] = cats[i].name;
         cat["rssi"] = lastAvgRSSI[i];
         cat["canFeed"] = cats[i].canFeed;
         cat["mac"] = cats[i].mac;
+        cat["lastSeen"] = lastSeenTimestamp[i];
     }
     String response;
     serializeJson(doc, response);
@@ -178,7 +181,7 @@ String getStatus() {
 }
 
 String getStatusProm() {
-    String out = String(
+    auto out = String(
         "# HELP feeder_cat_rssi rssi by cat\n# TYPE feeder_cat_rssi gauge\n");
     for (size_t i = 0; i < catsSize; i++) {
         out = out + String("feeder_cat_rssi{name=\"" + String(cats[i].name) +
@@ -210,9 +213,7 @@ class scanCallbacks : public NimBLEScanCallbacks {
             const CatItem cat = cats[ci];
             if (strcmp(mac.c_str(), cat.mac) == 0) {
                 const int rssi = advertisedDevice->getRSSI();
-                // Serial.printf("RSSI: %d\n", rssi);
                 lastAvgRSSI[ci] = averageRSSI(ci, rssi);
-                // pBLEScan->clearResults();
             }
         }
     }
@@ -440,7 +441,7 @@ void setup() {
     config.pixel_format = PIXFORMAT_JPEG;  // for streaming
     // config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
     config.fb_location = CAMERA_FB_IN_PSRAM;
-    config.jpeg_quality = 30;
+    config.jpeg_quality = 15;
     config.fb_count = 4;
     config.grab_mode = CAMERA_GRAB_LATEST;
 
@@ -481,7 +482,8 @@ void setup() {
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password);
     for (int i = 0; i < CATS_MAX_SIZE; i++) {
-        lastAvgRSSI[i] = -100;
+        lastAvgRSSI[i] = -99;
+        lastSeenTimestamp[i] = millis();
     }
     Serial.println("Setup done!");
 }
@@ -551,11 +553,11 @@ void checkWiFiAndPrint()
     }
 }
 
-void checkLid(unsigned long now) {
-    int targetBiggerRSSI = -100;
-    int otherCatBiggerRSSI = -100;
+void checkLid(const unsigned long now) {
+    int targetBiggerRSSI = -99;
+    int otherCatBiggerRSSI = -99;
     for (size_t i = 0; i < catsSize; i++) {
-        int avg = lastAvgRSSI[i];
+        const int avg = lastAvgRSSI[i];
         if (cats[i].canFeed) {
             if (targetBiggerRSSI < avg) {
                 targetBiggerRSSI = avg;
@@ -582,6 +584,11 @@ void checkLid(unsigned long now) {
             openLid();
         }
     }
+
+    if (now - lastClosed > 10000 && !lidOpen && lidMotion.attached) {
+        lidMotion.servo->detach();
+        lidMotion.attached = false;
+    }
 }
 
 void checkHealth() {
@@ -592,12 +599,21 @@ void checkHealth() {
     }
 }
 
+void checkLastSeen(const unsigned long now) {
+    for (int ci = 0; ci < CATS_MAX_SIZE; ci++) {
+        if (now - lastSeenTimestamp[ci] >= 3000) {
+            lastAvgRSSI[ci] = averageRSSI(ci, -99);
+        }
+    }
+}
+
 void periodic() {
     const unsigned long now = millis();
     if (now - lastExecution > period) {
         checkWiFiAndPrint();
         checkLid(now);
         checkHealth();
+        checkLastSeen(now);
         lastExecution = now;
     }
 }

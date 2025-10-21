@@ -7,6 +7,7 @@ bool lidOverride = false;
 int openAngle = 185;
 int closedAngle = 78;
 unsigned long lastOpen = 0;
+unsigned long lastClosed = 0;
 long lastFeedAmount = 0;
 
 // Servo
@@ -23,9 +24,10 @@ struct SmoothServo
     int duration;
     unsigned long startTime;
     bool active;
+    bool attached = false;
 } lidMotion;
 
-void startSmoothMove(Servo& servo, int from, int to, int steps, int duration)
+void startSmoothMove(Servo& servo, const int from, const int to, const int steps, const int duration)
 {
     lidMotion.servo = &servo;
     lidMotion.from = from;
@@ -35,19 +37,20 @@ void startSmoothMove(Servo& servo, int from, int to, int steps, int duration)
     lidMotion.startTime = millis();
     lidMotion.active = true;
     lidMotion.servo->attach(servoPIN, 500, 2400);
+    lidMotion.attached = true;
 }
 
 void updateSmoothMove()
 {
     if (!lidMotion.active) return;
 
-    unsigned long now = millis();
-    unsigned long elapsed = now - lidMotion.startTime;
+    const unsigned long now = millis();
+    const unsigned long elapsed = now - lidMotion.startTime;
 
     if (elapsed >=
         (static_cast<unsigned long>(lidMotion.duration) + SERVO_DURATION_TOLERANCE_MS))
     {
-        lidMotion.servo->detach();
+        //lidMotion.servo->detach();
         lidMotion.active = false;
         return;
     }
@@ -58,10 +61,10 @@ void updateSmoothMove()
         return;
     }
 
-    float progress = static_cast<float>(elapsed) / lidMotion.duration; // 0..1
+    const float progress = static_cast<float>(elapsed) / lidMotion.duration; // 0..1
     // cosine ease-in/out
-    float factor = (1 - cos(progress * PI)) / 2;
-    int angle = lidMotion.from + (lidMotion.to - lidMotion.from) * factor;
+    const float factor = (1 - cos(progress * PI)) / 2;
+    const int angle = lidMotion.from + (lidMotion.to - lidMotion.from) * factor;
 
     lidMotion.servo->write(angle);
 }
@@ -84,6 +87,7 @@ void closeLid()
         startSmoothMove(lidServo, openAngle, closedAngle, 100, 1000);
     }
     lidOpen = false;
+    lastClosed = millis();
     Serial.println("Close lid!");
 }
 
@@ -95,7 +99,7 @@ constexpr int stepPIN4 = 2;
 AccelStepper stepper(AccelStepper::FULL4WIRE, stepPIN1, stepPIN3, stepPIN2, stepPIN4);
 
 constexpr int MAX_MOVEMENTS = 5;
-long feedMovements[MAX_MOVEMENTS] = {-500, 500, -1000, 1000, 0};
+long feedMovements[MAX_MOVEMENTS] = {-250, 0, -250, 0, 0};
 int feedMovementIndex = 0;
 
 void setupMotors()
@@ -126,7 +130,7 @@ void feedAmount(const int amount)
 void updateStepper() {
     stepper.run();
     if (stepper.distanceToGo() == 0) {
-        if (feedMovementIndex >= MAX_MOVEMENTS) {
+        if (feedMovementIndex >= MAX_MOVEMENTS - 1) {
             stepper.disableOutputs();
         } else {
             feedMovementIndex++;
