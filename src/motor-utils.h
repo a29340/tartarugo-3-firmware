@@ -50,7 +50,6 @@ void updateSmoothMove()
     if (elapsed >=
         (static_cast<unsigned long>(lidMotion.duration) + SERVO_DURATION_TOLERANCE_MS))
     {
-        //lidMotion.servo->detach();
         lidMotion.active = false;
         return;
     }
@@ -84,7 +83,7 @@ void closeLid()
 {
     if (lidOpen)
     {
-        startSmoothMove(lidServo, openAngle, closedAngle, 100, 1000);
+        startSmoothMove(lidServo, openAngle, closedAngle, 50, 1000);
     }
     lidOpen = false;
     lastClosed = millis();
@@ -127,12 +126,17 @@ void feedAmount(const int amount)
     lastFeedAmount = amount;
 }
 
-void updateStepper() {
+void updateStepper()
+{
     stepper.run();
-    if (stepper.distanceToGo() == 0) {
-        if (feedMovementIndex >= MAX_MOVEMENTS - 1) {
+    if (stepper.distanceToGo() == 0)
+    {
+        if (feedMovementIndex >= MAX_MOVEMENTS - 1)
+        {
             stepper.disableOutputs();
-        } else {
+        }
+        else
+        {
             feedMovementIndex++;
             stepper.moveTo(feedMovements[feedMovementIndex]);
         }
