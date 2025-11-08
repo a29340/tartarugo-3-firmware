@@ -56,6 +56,7 @@ bool isConnected = false;
 bool isServerInitialized = false;
 unsigned long lastExecution = 0;
 int8_t wifiOffCounter = 0;
+int8_t healthCounter = 0;
 
 const char* wifiStatusName[] = {
     "WL_IDLE_STATUS", "WL_NO_SSID_AVAIL",
@@ -271,6 +272,7 @@ void initialiseWebServer()
               {
                   AsyncWebServerResponse* response = request->beginResponse(
                       200, "application/json", getStatusProm());
+                  healthCounter = 0;
                   request->send(response);
               });
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* request)
@@ -692,6 +694,14 @@ void checkLid(const unsigned long now)
     // }
 }
 
+void checkHealth() {
+    healthCounter++;
+    if (healthCounter >= 20)
+    {
+        ESP.restart();
+    }
+}
+
 void checkLastSeen(const unsigned long now)
 {
     for (int ci = 0; ci < CATS_MAX_SIZE; ci++)
@@ -710,6 +720,7 @@ void every250ms()
     {
         checkWiFiAndPrint();
         checkLid(now);
+        checkHealth();
         checkLastSeen(now);
         lastExecution = now;
     }
