@@ -55,6 +55,7 @@ constexpr int daylightOffset_sec = 3600; // adjust for DST
 bool isConnected = false;
 bool isServerInitialized = false;
 unsigned long lastExecution = 0;
+unsigned long lastExecution5s = 0;
 int8_t wifiOffCounter = 0;
 int8_t healthCounter = 0;
 
@@ -622,7 +623,7 @@ void checkWiFiAndPrint()
         // reconnect after 5 seconds of off time
         if (wifiOffCounter >= 20)
         {
-            ESP.restart();
+            // ESP.restart();
         }
     }
 }
@@ -656,13 +657,23 @@ void checkLid(const unsigned long now)
         const bool targetCatIsNotClose = targetBiggerRSSI < closeBeaconThresholdRSSI;
         const bool anotherCatIsCloserThanTarget = otherCatBiggerRSSI > openBeaconThresholdRSSI && otherCatBiggerRSSI >
             targetBiggerRSSI;
-        const bool aCatIsNear = targetBiggerRSSI > closeBeaconThresholdRSSI || otherCatBiggerRSSI >
-            closeBeaconThresholdRSSI;
+        // const bool aCatIsNear = targetBiggerRSSI > closeBeaconThresholdRSSI || otherCatBiggerRSSI >
+        //     closeBeaconThresholdRSSI;
 
         if ((targetCatIsNotClose || anotherCatIsCloserThanTarget) &&
-            ((now - lastOpen) >= 3000) && lidOpen)
+            now - lastOpen >= 3000)
         {
-            closeLid();
+            if (lidOpen)
+            {
+                closeLid();
+            } else
+            {
+                if (anotherCatIsCloserThanTarget)
+                {
+                    keepClosed();
+                    lastClosed = now;
+                }
+            }
             return;
         }
 
@@ -671,32 +682,32 @@ void checkLid(const unsigned long now)
             openLid();
             return;
         }
-
-        if (aCatIsNear && !lidMotion.attached)
-        {
-            lidMotion.servo->attach(servoPIN, 500, 2400);
-            lidMotion.servo->write(lidOpen ? openAngle : closedAngle);
-            lidMotion.attached = true;
-            return;
-        }
-
-        if (!aCatIsNear && lidMotion.attached)
-        {
-            lidMotion.attached = false;
-            lidMotion.servo->detach();
-        }
+        //
+        // if (aCatIsNear && !lidMotion.attached)
+        // {
+        //     lidMotion.servo->attach(servoPIN, 500, 2400);
+        //     lidMotion.servo->write(lidOpen ? openAngle : closedAngle);
+        //     lidMotion.attached = true;
+        //     return;
+        // }
+        //
+        // if (!aCatIsNear && lidMotion.attached)
+        // {
+        //     lidMotion.attached = false;
+        //     lidMotion.servo->detach();
+        // }
     }
 
 
-    // if (now - lastClosed > 10000 && !lidOpen && lidMotion.attached) {
-    //     lidMotion.servo->detach();
-    //     lidMotion.attached = false;
-    // }
+    if (now - lastClosed > 10000 && !lidOpen && lidMotion.attached) {
+        lidMotion.servo->detach();
+        lidMotion.attached = false;
+    }
 }
 
 void checkHealth() {
     healthCounter++;
-    if (healthCounter >= 20)
+    if (healthCounter >= 100)
     {
         ESP.restart();
     }
@@ -713,10 +724,10 @@ void checkLastSeen(const unsigned long now)
     }
 }
 
-void every250ms()
+void everyPeriod(const unsigned int period)
 {
     const unsigned long now = millis();
-    if (now - lastExecution > 250)
+    if (now - lastExecution > period)
     {
         checkWiFiAndPrint();
         checkLid(now);
@@ -726,20 +737,31 @@ void every250ms()
     }
 }
 
-void every5s()
-{
-    const unsigned long now = millis();
-    if (now - lastExecution > 5000)
-    {
-        // check that lid is still open or closed
-        if (!lidMotion.servo->attached())
-        {
-            if (lidOpen)
-            {
-            }
-        }
-    }
-}
+// void every5s()
+// {
+//     const unsigned long now = millis();
+//     if (now - lastExecution5s > 5000)
+//     {
+//         // check that lid is still open or closed
+//         if (!lidMotion.servo->attached())
+//         {
+//             lidMotion.servo->attach(servoPIN);
+//             if (lidOpen)
+//             {
+//                 lidMotion.servo->write(openAngle);
+//             }
+//             else
+//             {
+//                 lidMotion.servo->write(closedAngle);
+//             }
+//         }
+//     }
+//     if (now - lastExecution5s > 5500)
+//     {
+//         lidMotion.servo->detach();
+//         lastExecution5s = now;
+//     }
+// }
 
 void runSchedule()
 {
@@ -763,9 +785,9 @@ void runSchedule()
 
 void loop()
 {
-    every250ms();
+    everyPeriod(500);
 
-    every5s();
+    // every5s();
     // Update servo
     updateSmoothMove();
 

@@ -79,6 +79,13 @@ void openLid()
     Serial.println("Open lid!");
 }
 
+void keepClosed()
+{
+    lidMotion.servo->attach(servoPIN, 500, 2400);
+    lidMotion.servo->write(lidOpen ? openAngle : closedAngle);
+    lidMotion.attached = true;
+}
+
 void closeLid()
 {
     if (lidOpen)
