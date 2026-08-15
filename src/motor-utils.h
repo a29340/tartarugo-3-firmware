@@ -3,21 +3,27 @@
 
 
 bool lidOpen = false;
+bool lid2Open = false;
 bool lidOverride = false;
 int openAngle = 185;
 int closedAngle = 75;
 unsigned long lastOpen = 0;
 unsigned long lastClosed = 0;
+unsigned long lastLid2Open = 0;
+unsigned long lastLid2Closed = 0;
 long lastFeedAmount = 0;
 
 // Servo
 Servo lidServo;
+Servo lid2Servo;
 constexpr int servoPIN = 12;
+constexpr int lid2ServoPIN = 5;
 constexpr int SERVO_DURATION_TOLERANCE_MS = 4000;
 
 struct SmoothServo
 {
     Servo* servo;
+    int pin;
     int from;
     int to;
     int steps;
@@ -25,54 +31,63 @@ struct SmoothServo
     unsigned long startTime;
     bool active;
     bool attached = false;
-} lidMotion;
+} lidMotion, lid2Motion;
 
-void startSmoothMove(Servo& servo, const int from, const int to, const int steps, const int duration)
+void startSmoothMove(SmoothServo& motion, const int pin, Servo& servo,
+                     const int from, const int to, const int steps,
+                     const int duration)
 {
-    lidMotion.servo = &servo;
-    lidMotion.from = from;
-    lidMotion.to = to;
-    lidMotion.steps = steps;
-    lidMotion.duration = duration;
-    lidMotion.startTime = millis();
-    lidMotion.active = true;
-    lidMotion.servo->attach(servoPIN, 500, 2400);
-    lidMotion.attached = true;
+    motion.servo = &servo;
+    motion.pin = pin;
+    motion.from = from;
+    motion.to = to;
+    motion.steps = steps;
+    motion.duration = duration;
+    motion.startTime = millis();
+    motion.active = true;
+    motion.servo->attach(motion.pin, 500, 2400);
+    motion.attached = true;
 }
 
-void updateSmoothMove()
+void updateSmoothMove(SmoothServo& motion)
 {
-    if (!lidMotion.active) return;
+    if (!motion.active) return;
 
     const unsigned long now = millis();
-    const unsigned long elapsed = now - lidMotion.startTime;
+    const unsigned long elapsed = now - motion.startTime;
 
     if (elapsed >=
-        (static_cast<unsigned long>(lidMotion.duration) + SERVO_DURATION_TOLERANCE_MS))
+        (static_cast<unsigned long>(motion.duration) + SERVO_DURATION_TOLERANCE_MS))
     {
-        lidMotion.active = false;
+        motion.active = false;
         return;
     }
 
-    if (elapsed >= static_cast<unsigned long>(lidMotion.duration))
+    if (elapsed >= static_cast<unsigned long>(motion.duration))
     {
-        lidMotion.servo->write(lidMotion.to); // final angle
+        motion.servo->write(motion.to); // final angle
         return;
     }
 
-    const float progress = static_cast<float>(elapsed) / lidMotion.duration; // 0..1
+    const float progress = static_cast<float>(elapsed) / motion.duration; // 0..1
     // cosine ease-in/out
     const float factor = (1 - cos(progress * PI)) / 2;
-    const int angle = lidMotion.from + (lidMotion.to - lidMotion.from) * factor;
+    const int angle = motion.from + (motion.to - motion.from) * factor;
 
-    lidMotion.servo->write(angle);
+    motion.servo->write(angle);
+}
+
+void updateSmoothMoves()
+{
+    updateSmoothMove(lidMotion);
+    updateSmoothMove(lid2Motion);
 }
 
 void openLid()
 {
     if (!lidOpen)
     {
-        startSmoothMove(lidServo, closedAngle, openAngle, 50, 1000);
+        startSmoothMove(lidMotion, servoPIN, lidServo, closedAngle, openAngle, 50, 1000);
     }
     lidOpen = true;
     lastOpen = millis();
@@ -90,11 +105,33 @@ void closeLid()
 {
     if (lidOpen)
     {
-        startSmoothMove(lidServo, openAngle, closedAngle, 50, 1000);
+        startSmoothMove(lidMotion, servoPIN, lidServo, openAngle, closedAngle, 50, 1000);
     }
     lidOpen = false;
     lastClosed = millis();
     Serial.println("Close lid!");
+}
+
+void openLid2()
+{
+    if (!lid2Open)
+    {
+        startSmoothMove(lid2Motion, lid2ServoPIN, lid2Servo, closedAngle, openAngle, 50, 1000);
+    }
+    lid2Open = true;
+    lastLid2Open = millis();
+    Serial.println("Open lid2!");
+}
+
+void closeLid2()
+{
+    if (lid2Open)
+    {
+        startSmoothMove(lid2Motion, lid2ServoPIN, lid2Servo, openAngle, closedAngle, 50, 1000);
+    }
+    lid2Open = false;
+    lastLid2Closed = millis();
+    Serial.println("Close lid2!");
 }
 
 // Stepper
@@ -117,6 +154,7 @@ void setupMotors()
     ESP32PWM::allocateTimer(3);
 
     lidServo.setPeriodHertz(50); // standard 50 Hz servo
+    lid2Servo.setPeriodHertz(50); // standard 50 Hz servo
 
     // Init stepper
     stepper.setMaxSpeed(400);

@@ -15,6 +15,8 @@
 
 portMUX_TYPE rssiMux = portMUX_INITIALIZER_UNLOCKED;
 
+SemaphoreHandle_t nvsMutex = NULL;
+
 Preferences prefs;
 
 // Time settings
@@ -83,6 +85,7 @@ unsigned int scheduleSize = 0;
 #define MAX_LOG_LEN 128
 
 void logEvent(const char* msg) {
+    xSemaphoreTake(nvsMutex, portMAX_DELAY);
     prefs.begin("logs", false);
     uint8_t idx = prefs.getUChar("idx", 0);
     char key[8];
@@ -91,6 +94,7 @@ void logEvent(const char* msg) {
     idx = (idx + 1) % MAX_LOGS;
     prefs.putUChar("idx", idx);
     prefs.end();
+    xSemaphoreGive(nvsMutex);
 }
 
 void saveResetReason() {
@@ -134,26 +138,33 @@ void saveLastFeed()
     getLocalTime(&lastFeedTime);
     // Convert struct tm → time_t
     time_t t = mktime(&lastFeedTime);
+    xSemaphoreTake(nvsMutex, portMAX_DELAY);
     prefs.begin("catfeeder", false);
     prefs.putLong64("lastFeed", (int64_t)t);
     prefs.putLong("lastFeedAmount", lastFeedAmount);
     prefs.end();
+    xSemaphoreGive(nvsMutex);
 }
 
 void saveScheduleBlob()
 {
+    xSemaphoreTake(nvsMutex, portMAX_DELAY);
     prefs.begin("catfeeder", false);
+    prefs.putUChar("scheduleVersion", SCHEDULE_BLOB_VERSION);
     prefs.putBytes("schedule", schedule, scheduleSize * sizeof(ScheduleItem));
     prefs.end();
+    xSemaphoreGive(nvsMutex);
 }
 
 void saveSettings()
 {
+    xSemaphoreTake(nvsMutex, portMAX_DELAY);
     prefs.begin("catfeeder", false);
     prefs.putBytes("cats", cats, catsSize * sizeof(CatItem));
     prefs.putInt("openBeaconRSSI", openBeaconThresholdRSSI);
     prefs.putInt("closeBeaconRSSI", closeBeaconThresholdRSSI);
     prefs.end();
+    xSemaphoreGive(nvsMutex);
 }
 
 
@@ -185,6 +196,7 @@ String getStatus()
     const JsonObject status = doc.to<JsonObject>();
     status["wifiSignal"] = WiFi.RSSI();
     status["isLidOpen"] = lidOpen;
+    status["isLid2Open"] = lid2Open;
     status["isAutoMode"] = !lidOverride;
     status["lastFeedTime"] =
         lastFeedAmount == 0 ? "never" : printDateTime(&lastFeedTime).c_str();
@@ -225,6 +237,10 @@ String getStatusProm()
         "TYPE feeder_is_open counter\n");
     out = out + String("feeder_is_open " + String(lidOpen) + "\n");
     out = out + String(
+        "# HELP feeder_lid2_open indicates if the second lid is open or not\n# "
+        "TYPE feeder_lid2_open gauge\n");
+    out = out + String("feeder_lid2_open " + String(lid2Open) + "\n");
+    out = out + String(
         "# HELP feeder_threshold open or close rssi threshold\n# "
         "TYPE feeder_threshold gauge\n");
     out = out + String("feeder_threshold{status=\"open\"} " +
@@ -264,6 +280,7 @@ void initialiseWebServer()
 
     server.on("/api/logs", HTTP_GET, [](AsyncWebServerRequest* request)
     {
+        xSemaphoreTake(nvsMutex, portMAX_DELAY);
         prefs.begin("logs", true);
         const uint8_t idx = prefs.getUChar("idx", 0);
 
@@ -280,6 +297,7 @@ void initialiseWebServer()
             if (msg.length()) obj["logs"][String((idx + i) % MAX_LOGS)] = msg;
         }
         prefs.end();
+        xSemaphoreGive(nvsMutex);
         String out;
         serializeJson(doc, out);
         request->send(200, "application/json", out);
@@ -302,8 +320,16 @@ void initialiseWebServer()
     });
     server.on("/api/lid/close", HTTP_POST, [](AsyncWebServerRequest* request)
     {
-        lidOverride = true;
-        closeLid();
+        const AsyncWebParameter* lidParam = request->getParam("lid");
+        if (lidParam && lidParam->value() == "lid2")
+        {
+            closeLid2();
+        }
+        else
+        {
+            lidOverride = true;
+            closeLid();
+        }
         request->send(200, "application/json", getStatus());
     });
     server.on("/api/lid/auto", HTTP_POST, [](AsyncWebServerRequest* request)
@@ -357,6 +383,8 @@ void initialiseWebServer()
                 schedule[i].hour = arr[i]["hour"] | 0;
                 schedule[i].minute = arr[i]["minute"] | 0;
                 schedule[i].amount = arr[i]["amount"] | 0;
+                schedule[i].isLid2 = arr[i]["isLid2"] | false;
+                schedule[i].lid2Open = arr[i]["lid2Open"] | true;
             }
             saveScheduleBlob();
             request->send(201, "application/json", "{\"status\":\"ok\"}");
@@ -405,6 +433,8 @@ void initialiseWebServer()
             obj["hour"] = schedule[i].hour;
             obj["minute"] = schedule[i].minute;
             obj["amount"] = schedule[i].amount;
+            obj["isLid2"] = schedule[i].isLid2;
+            obj["lid2Open"] = schedule[i].lid2Open;
         }
         String response;
         serializeJson(doc, response);
@@ -448,6 +478,7 @@ void initialiseWebServer()
 
 void loadSettings()
 {
+    xSemaphoreTake(nvsMutex, portMAX_DELAY);
     prefs.begin("catfeeder", true);
     const time_t t = static_cast<time_t>(prefs.getLong64("lastFeed", 0));
     if (t != 0)
@@ -456,11 +487,28 @@ void loadSettings()
     }
     lastFeedAmount = prefs.getLong("lastFeedAmount", 0);
     const size_t len = prefs.getBytes("schedule", &schedule, SCHEDULE_MAX_SIZE * sizeof(ScheduleItem));
-    scheduleSize = len / sizeof(ScheduleItem);
+    if (prefs.getUChar("scheduleVersion", 0) != SCHEDULE_BLOB_VERSION ||
+        len % sizeof(ScheduleItem) != 0)
+    {
+        scheduleSize = 0;
+    }
+    else
+    {
+        scheduleSize = len / sizeof(ScheduleItem);
+    }
     for (int i = 0; i < scheduleSize; i++)
     {
-        Serial.printf("Scheduled feeding: %d:%d amount: %d\n", schedule[i].hour, schedule[i].minute,
-                      schedule[i].amount);
+        if (schedule[i].isLid2)
+        {
+            Serial.printf("Scheduled lid2 %s: %d:%d\n",
+                          schedule[i].lid2Open ? "open" : "close",
+                          schedule[i].hour, schedule[i].minute);
+        }
+        else
+        {
+            Serial.printf("Scheduled feeding: %d:%d amount: %d\n", schedule[i].hour, schedule[i].minute,
+                          schedule[i].amount);
+        }
     }
     openBeaconThresholdRSSI = prefs.getInt("openBeaconRSSI", openBeaconThresholdRSSI);
     closeBeaconThresholdRSSI = prefs.getInt("closeBeaconRSSI", closeBeaconThresholdRSSI);
@@ -477,12 +525,14 @@ void loadSettings()
     }
 
     prefs.end();
+    xSemaphoreGive(nvsMutex);
 }
 
 void setup()
 {
     Serial.begin(115200);
     delay(2000);
+    nvsMutex = xSemaphoreCreateMutex();
     saveResetReason();
     Serial.println("Setup started!");
     pinMode(FLASH_PIN, OUTPUT);
@@ -653,6 +703,11 @@ void checkLid(const unsigned long now)
         lidMotion.servo->detach();
         lidMotion.attached = false;
     }
+
+    if (now - lastLid2Closed > 10000 && !lid2Open && lid2Motion.attached) {
+        lid2Motion.servo->detach();
+        lid2Motion.attached = false;
+    }
 }
 
 void checkHealth() {
@@ -697,10 +752,27 @@ void runSchedule()
             if (schedule[i].hour == nowTm.tm_hour &&
                 schedule[i].minute == nowTm.tm_min && nowTm.tm_sec == 0)
             {
-                Serial.printf("Feeding time! %d\n", schedule[i].amount);
-                feedAmount(schedule[i].amount);
-                saveLastFeed();
-                delay(2000);
+                if (schedule[i].isLid2)
+                {
+                    if (schedule[i].lid2Open)
+                    {
+                        Serial.println("Scheduled: open lid2!");
+                        openLid2();
+                    }
+                    else
+                    {
+                        Serial.println("Scheduled: close lid2!");
+                        closeLid2();
+                    }
+                }
+                else
+                {
+                    Serial.printf("Feeding time! %d\n", schedule[i].amount);
+                    openLid2();
+                    feedAmount(schedule[i].amount);
+                    saveLastFeed();
+                    delay(2000);
+                }
             }
         }
     }
@@ -711,8 +783,8 @@ void loop()
 {
     everyPeriod(500);
 
-    // Update servo
-    updateSmoothMove();
+    // Update servos
+    updateSmoothMoves();
 
     // Update stepper
     updateStepper();

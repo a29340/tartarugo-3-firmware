@@ -10,7 +10,12 @@ struct ScheduleItem
     uint8_t hour;
     uint8_t minute;
     uint16_t amount;
+    bool isLid2;
+    bool lid2Open;
 };
+
+// bump when ScheduleItem layout changes (old NVS blobs become invalid)
+constexpr uint8_t SCHEDULE_BLOB_VERSION = 1;
 
 String printDateTime(const tm* dateTime)
 {
