@@ -10,8 +10,6 @@
 #include <WiFi.h>
 #include <time.h>
 #include <WiFiCredentials.h>
-#include "NimBLEBeacon.h"
-#include "NimBLEEddystoneTLM.h"
 #include "esp_camera.h"
 #include "motor-utils.h"
 #include "time-utils.h"
@@ -56,7 +54,6 @@ bool isConnected = false;
 bool isServerInitialized = false;
 unsigned long lastExecution = 0;
 unsigned long lastExecution5s = 0;
-int8_t wifiOffCounter = 0;
 int8_t healthCounter = 0;
 
 const char* wifiStatusName[] = {
@@ -107,6 +104,55 @@ int lastSeenTimestamp[CATS_MAX_SIZE];
 ScheduleItem schedule[SCHEDULE_MAX_SIZE];
 unsigned int scheduleSize = 0;
 
+#define MAX_LOGS 50
+#define MAX_LOG_LEN 128
+
+void logEvent(const char* msg) {
+    prefs.begin("logs", false);
+    uint8_t idx = prefs.getUChar("idx", 0);
+    char key[8];
+    snprintf(key, sizeof(key), "l%02d", idx);
+    prefs.putString(key, msg);
+    idx = (idx + 1) % MAX_LOGS;
+    prefs.putUChar("idx", idx);
+    prefs.end();
+}
+
+void saveResetReason() {
+    char buf[128];
+    const esp_reset_reason_t reason = esp_reset_reason();
+    String r;
+    switch (reason)
+    {
+    case ESP_RST_POWERON:
+        r = "Power on";
+        break;
+    case ESP_RST_EXT:
+        r = "External reset";
+        break;
+    case ESP_RST_SW:
+        r = "Software reset";
+        break;
+    case ESP_RST_PANIC:
+        r = "Panic / crash";
+        break;
+    case ESP_RST_INT_WDT:
+        r = "Interrupt watchdog";
+        break;
+    case ESP_RST_TASK_WDT:
+        r = "Task watchdog";
+        break;
+    case ESP_RST_BROWNOUT:
+        r = "Brownout";
+        break;
+    default:
+        r = "Unknown";
+        break;
+    }
+    snprintf(buf, sizeof(buf),
+             "Reboot reason=%s", r.c_str());
+    logEvent(buf);
+}
 
 void saveLastFeed()
 {
@@ -241,6 +287,28 @@ void initialiseWebServer()
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers",
                                          "Content-Type, Authorization");
 
+    server.on("/api/logs", HTTP_GET, [](AsyncWebServerRequest* request)
+    {
+        prefs.begin("logs", true);
+        const uint8_t idx = prefs.getUChar("idx", 0);
+
+        JsonDocument doc;
+        const JsonObject obj = doc.to<JsonObject>();
+        obj["idx"] = idx;
+        obj["logs"] = doc.add<JsonObject>();
+
+        for (int i = idx; i < MAX_LOGS + idx; i++)
+        {
+            char key[8];
+            snprintf(key, sizeof(key), "l%02d", (idx + i) % MAX_LOGS);
+            String msg = prefs.getString(key, "");
+            if (msg.length()) obj["logs"][String((idx + i) % MAX_LOGS)] = msg;
+        }
+        prefs.end();
+        String out;
+        serializeJson(doc, out);
+        request->send(200, "application/json", out);
+    });
     server.on("/api/flash/on", HTTP_POST, [](AsyncWebServerRequest* request)
     {
         digitalWrite(FLASH_PIN, HIGH);
@@ -462,6 +530,7 @@ void setup()
 {
     Serial.begin(115200);
     delay(2000);
+    saveResetReason();
     Serial.println("Setup started!");
     pinMode(FLASH_PIN, OUTPUT);
     // Init Camera
@@ -614,16 +683,7 @@ void checkWiFiAndPrint()
             Serial.println("Acquired NTP time");
             getLocalTime(&lastStartTime);
             timeIsSet = true;
-        }
-    }
-    else
-    {
-        Serial.printf("Wifi status: %s\n", wifiStatusName[wifiStatus]);
-        wifiOffCounter++;
-        // reconnect after 5 seconds of off time
-        if (wifiOffCounter >= 20)
-        {
-            // ESP.restart();
+            logEvent(printDateTime(&lastStartTime).c_str());
         }
     }
 }
@@ -657,9 +717,6 @@ void checkLid(const unsigned long now)
         const bool targetCatIsNotClose = targetBiggerRSSI < closeBeaconThresholdRSSI;
         const bool anotherCatIsCloserThanTarget = otherCatBiggerRSSI > openBeaconThresholdRSSI && otherCatBiggerRSSI >
             targetBiggerRSSI;
-        // const bool aCatIsNear = targetBiggerRSSI > closeBeaconThresholdRSSI || otherCatBiggerRSSI >
-        //     closeBeaconThresholdRSSI;
-
         if ((targetCatIsNotClose || anotherCatIsCloserThanTarget) &&
             now - lastOpen >= 3000)
         {
@@ -682,20 +739,6 @@ void checkLid(const unsigned long now)
             openLid();
             return;
         }
-        //
-        // if (aCatIsNear && !lidMotion.attached)
-        // {
-        //     lidMotion.servo->attach(servoPIN, 500, 2400);
-        //     lidMotion.servo->write(lidOpen ? openAngle : closedAngle);
-        //     lidMotion.attached = true;
-        //     return;
-        // }
-        //
-        // if (!aCatIsNear && lidMotion.attached)
-        // {
-        //     lidMotion.attached = false;
-        //     lidMotion.servo->detach();
-        // }
     }
 
 
@@ -737,32 +780,6 @@ void everyPeriod(const unsigned int period)
     }
 }
 
-// void every5s()
-// {
-//     const unsigned long now = millis();
-//     if (now - lastExecution5s > 5000)
-//     {
-//         // check that lid is still open or closed
-//         if (!lidMotion.servo->attached())
-//         {
-//             lidMotion.servo->attach(servoPIN);
-//             if (lidOpen)
-//             {
-//                 lidMotion.servo->write(openAngle);
-//             }
-//             else
-//             {
-//                 lidMotion.servo->write(closedAngle);
-//             }
-//         }
-//     }
-//     if (now - lastExecution5s > 5500)
-//     {
-//         lidMotion.servo->detach();
-//         lastExecution5s = now;
-//     }
-// }
-
 void runSchedule()
 {
     for (int i = 0; i < scheduleSize; i++)
@@ -787,7 +804,6 @@ void loop()
 {
     everyPeriod(500);
 
-    // every5s();
     // Update servo
     updateSmoothMove();
 

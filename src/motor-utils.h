@@ -5,7 +5,7 @@
 bool lidOpen = false;
 bool lidOverride = false;
 int openAngle = 185;
-int closedAngle = 78;
+int closedAngle = 75;
 unsigned long lastOpen = 0;
 unsigned long lastClosed = 0;
 long lastFeedAmount = 0;
