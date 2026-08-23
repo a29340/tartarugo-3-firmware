@@ -315,7 +315,12 @@ void initialiseWebServer()
     server.on("/api/lid/open", HTTP_POST, [](AsyncWebServerRequest* request)
     {
         lidOverride = true;
-        openLid();
+        const AsyncWebParameter* lidParam = request->getParam("lid");
+        if (lidParam && lidParam->value() == "lid2") {
+            openLid(LID_2);
+        } else {
+            openLid(LID_1);
+        }
         request->send(200, "application/json", getStatus());
     });
     server.on("/api/lid/close", HTTP_POST, [](AsyncWebServerRequest* request)
@@ -323,12 +328,12 @@ void initialiseWebServer()
         const AsyncWebParameter* lidParam = request->getParam("lid");
         if (lidParam && lidParam->value() == "lid2")
         {
-            closeLid2();
+            closeLid(LID_2);
         }
         else
         {
             lidOverride = true;
-            closeLid();
+            closeLid(LID_1);
         }
         request->send(200, "application/json", getStatus());
     });
@@ -679,13 +684,13 @@ void checkLid(const unsigned long now)
         {
             if (lidOpen)
             {
-                closeLid();
+                closeLid(LID_1);
             } else
             {
                 if (anotherCatIsCloserThanTarget)
                 {
-                    keepClosed();
-                    lastClosed = now;
+                    // keepClosed();
+                    // lastClosed = now;
                 }
             }
             return;
@@ -693,7 +698,7 @@ void checkLid(const unsigned long now)
 
         if (targetCatIsClose && !anotherCatIsCloserThanTarget && !lidOpen)
         {
-            openLid();
+            openLid(LID_1);
             return;
         }
     }
@@ -736,7 +741,7 @@ void everyPeriod(const unsigned int period)
     {
         checkWiFiAndPrint();
         checkLid(now);
-        checkHealth();
+        // checkHealth();
         checkLastSeen(now);
         lastExecution = now;
     }
@@ -757,18 +762,18 @@ void runSchedule()
                     if (schedule[i].lid2Open)
                     {
                         Serial.println("Scheduled: open lid2!");
-                        openLid2();
+                        openLid(LID_2);
                     }
                     else
                     {
                         Serial.println("Scheduled: close lid2!");
-                        closeLid2();
+                        closeLid(LID_2);
                     }
                 }
                 else
                 {
                     Serial.printf("Feeding time! %d\n", schedule[i].amount);
-                    openLid2();
+                    openLid(LID_2);
                     feedAmount(schedule[i].amount);
                     saveLastFeed();
                     delay(2000);

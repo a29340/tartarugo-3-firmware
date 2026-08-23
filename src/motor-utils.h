@@ -16,9 +16,9 @@ long lastFeedAmount = 0;
 // Servo
 Servo lidServo;
 Servo lid2Servo;
-constexpr int servoPIN = 12;
-constexpr int lid2ServoPIN = 5;
-constexpr int SERVO_DURATION_TOLERANCE_MS = 4000;
+constexpr int servoPIN = 15;
+constexpr int lid2ServoPIN = 4;
+// constexpr int SERVO_DURATION_TOLERANCE_MS = 4000;
 
 struct SmoothServo
 {
@@ -33,6 +33,34 @@ struct SmoothServo
     bool attached = false;
 } lidMotion, lid2Motion;
 
+void updateSmoothMove(SmoothServo& motion)
+{
+    if (!motion.active) return;
+
+    const unsigned long now = millis();
+    const unsigned long elapsed = now - motion.startTime;
+
+    // if (elapsed >=
+    //     (static_cast<unsigned long>(motion.duration) + SERVO_DURATION_TOLERANCE_MS))
+    // {
+    //     motion.active = false;
+    //     return;
+    // }
+    //
+    if (elapsed >= static_cast<unsigned long>(motion.duration))
+    {
+        motion.servo->write(motion.to); // final angle
+        motion.active = false;
+        return;
+    }
+
+    // const float progress = static_cast<float>(elapsed) / motion.duration; // 0..1
+    // // cosine ease-in/out
+    // const float factor = (1 - cos(progress * PI)) / 2;
+    // const int angle = motion.from + (motion.to - motion.from) * factor;
+
+}
+
 void startSmoothMove(SmoothServo& motion, const int pin, Servo& servo,
                      const int from, const int to, const int steps,
                      const int duration)
@@ -45,36 +73,10 @@ void startSmoothMove(SmoothServo& motion, const int pin, Servo& servo,
     motion.duration = duration;
     motion.startTime = millis();
     motion.active = true;
-    motion.servo->attach(motion.pin, 500, 2400);
-    motion.attached = true;
-}
-
-void updateSmoothMove(SmoothServo& motion)
-{
-    if (!motion.active) return;
-
-    const unsigned long now = millis();
-    const unsigned long elapsed = now - motion.startTime;
-
-    if (elapsed >=
-        (static_cast<unsigned long>(motion.duration) + SERVO_DURATION_TOLERANCE_MS))
-    {
-        motion.active = false;
-        return;
+    if (!motion.attached) {
+        motion.servo->attach(motion.pin, 500, 2400);
+        motion.attached = true;
     }
-
-    if (elapsed >= static_cast<unsigned long>(motion.duration))
-    {
-        motion.servo->write(motion.to); // final angle
-        return;
-    }
-
-    const float progress = static_cast<float>(elapsed) / motion.duration; // 0..1
-    // cosine ease-in/out
-    const float factor = (1 - cos(progress * PI)) / 2;
-    const int angle = motion.from + (motion.to - motion.from) * factor;
-
-    motion.servo->write(angle);
 }
 
 void updateSmoothMoves()
@@ -83,15 +85,35 @@ void updateSmoothMoves()
     updateSmoothMove(lid2Motion);
 }
 
-void openLid()
+enum Lid
 {
-    if (!lidOpen)
+    LID_1 = 1,
+    LID_2 = 2,
+    LID_BOTH = 3
+};
+
+void openLid(const int which)
+{
+    if (which & LID_1)
     {
-        startSmoothMove(lidMotion, servoPIN, lidServo, closedAngle, openAngle, 50, 1000);
+        if (!lidOpen)
+        {
+            startSmoothMove(lidMotion, servoPIN, lidServo, closedAngle, openAngle, 50, 100);
+        }
+        lidOpen = true;
+        lastOpen = millis();
+        Serial.println("Open lid!");
     }
-    lidOpen = true;
-    lastOpen = millis();
-    Serial.println("Open lid!");
+    if (which & LID_2)
+    {
+        if (!lid2Open)
+        {
+            startSmoothMove(lid2Motion, lid2ServoPIN, lid2Servo, closedAngle, openAngle, 50, 100);
+        }
+        lid2Open = true;
+        lastLid2Open = millis();
+        Serial.println("Open lid2!");
+    }
 }
 
 void keepClosed()
@@ -101,44 +123,35 @@ void keepClosed()
     lidMotion.attached = true;
 }
 
-void closeLid()
+void closeLid(const int which)
 {
-    if (lidOpen)
+    if (which & LID_1)
     {
-        startSmoothMove(lidMotion, servoPIN, lidServo, openAngle, closedAngle, 50, 1000);
+        if (lidOpen)
+        {
+            startSmoothMove(lidMotion, servoPIN, lidServo, openAngle, closedAngle, 50, 100);
+        }
+        lidOpen = false;
+        lastClosed = millis();
+        Serial.println("Close lid!");
     }
-    lidOpen = false;
-    lastClosed = millis();
-    Serial.println("Close lid!");
-}
-
-void openLid2()
-{
-    if (!lid2Open)
+    if (which & LID_2)
     {
-        startSmoothMove(lid2Motion, lid2ServoPIN, lid2Servo, closedAngle, openAngle, 50, 1000);
+        if (lid2Open)
+        {
+            startSmoothMove(lid2Motion, lid2ServoPIN, lid2Servo, openAngle, closedAngle, 50, 100);
+        }
+        lid2Open = false;
+        lastLid2Closed = millis();
+        Serial.println("Close lid2!");
     }
-    lid2Open = true;
-    lastLid2Open = millis();
-    Serial.println("Open lid2!");
-}
-
-void closeLid2()
-{
-    if (lid2Open)
-    {
-        startSmoothMove(lid2Motion, lid2ServoPIN, lid2Servo, openAngle, closedAngle, 50, 1000);
-    }
-    lid2Open = false;
-    lastLid2Closed = millis();
-    Serial.println("Close lid2!");
 }
 
 // Stepper
 constexpr int stepPIN1 = 13;
-constexpr int stepPIN2 = 14;
-constexpr int stepPIN3 = 15;
-constexpr int stepPIN4 = 2;
+constexpr int stepPIN2 = 12;
+constexpr int stepPIN3 = 14;
+constexpr int stepPIN4 = 27;
 AccelStepper stepper(AccelStepper::FULL4WIRE, stepPIN1, stepPIN3, stepPIN2, stepPIN4);
 
 constexpr int MAX_MOVEMENTS = 5;
