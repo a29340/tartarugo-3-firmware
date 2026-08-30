@@ -30,10 +30,10 @@ There is no test suite. Verify changes by building, flashing, and exercising the
 
 ## Hardware pins (motor-utils.h, main.cpp)
 
-| Pin | Function |
-|-----|----------|
-| 15 | Lid 1 servo (main lid) |
-| 4  | Lid 2 servo (feeding chute) **and** status flash LED (`FLASH_PIN`) — shared |
+| Pin | Function                                          |
+|-----|---------------------------------------------------|
+| 15 | Lid 1 servo (dry food lid)                        |
+| 4  | Lid 2 servo (wet food chute)                      |
 | 13, 12, 14, 27 | Stepper, FULL4WIRE (wired 13→1, 14→2, 12→3, 27→4) |
 
 Servo angle 0 = open, 180 = closed; servos are attached only while moving / recently active and detached ~10s after closing (see `checkLid`).
@@ -49,7 +49,7 @@ Servo angle 0 = open, 180 = closed; servos are attached only while moving / rece
 
 ## HTTP API
 
-Endpoints (see `openapi.yaml` for full details): `GET /api/status`, `GET /api/status/prometheus` (Prometheus text, but sent with `Content-Type: application/json`), `GET /api/logs`, `POST /api/feed`, `POST /api/schedule`, `GET /api/schedule`, `POST /api/settings`, `GET /api/settings`, `POST /api/lid/open|close|auto` (optional `lid=lid2` param), `POST /api/flash/on|off`, `GET /openapi`.
+Endpoints (see `openapi.yaml` for full details): `GET /api/status`, `GET /api/status/prometheus` (Prometheus text, but sent with `Content-Type: application/json`), `GET /api/logs`, `POST /api/feed`, `POST /api/schedule`, `GET /api/schedule`, `POST /api/settings`, `GET /api/settings`, `POST /api/lid/open|close|auto` (optional `lid=lid2` param), `GET /openapi`.
 
 **When adding/changing an endpoint: update `openapi.yaml` in the same change.** It is compiled into the firmware and served at `/openapi`, so the spec is the contract. Run the redocly lint afterwards.
 
@@ -68,7 +68,6 @@ Endpoints (see `openapi.yaml` for full details): `GET /api/status`, `GET /api/st
 
 ## Gotchas
 
-- `FLASH_PIN` (4) and `lid2ServoPIN` (4) are the same GPIO — driving the flash while the lid 2 servo is attached interacts; be careful changing either.
 - `openLid`/`closeLid` take a bitmask (`Lid` enum), but the API maps `lid=lid2` to `LID_2` and default to `LID_1`; note `/api/lid/close` does NOT set `lidOverride` for lid 2.
 - The OpenAPI header embeds the spec verbatim; the YAML must stay ASCII-safe for `tools/generate_openapi_header.py` escaping.
 - OTA envs hardcode IPs in `platformio.ini`; `usb` is the safe default for local dev.

@@ -27,8 +27,6 @@ tags:
     description: Feeder status
   - name: lid
     description: Lid control
-  - name: flash
-    description: Status flash LED
   - name: feed
     description: Manual feeding
   - name: schedule
@@ -115,7 +113,7 @@ paths:
       tags: [lid]
       summary: Open the lid
       description: |
-        Opens lid 1 (main lid) or lid 2 (feeding chute). Also switches the
+        Opens lid 1 (dry food) or lid 2 (wet food). Also switches the
         feeder into manual mode (`isAutoMode: false`).
       operationId: openLid
       parameters:
@@ -132,7 +130,7 @@ paths:
       tags: [lid]
       summary: Close the lid
       description: |
-        Closes lid 1 (main lid) or lid 2 (feeding chute). For lid 1 this also
+        Closes lid 1 (dry food) or lid 2 (wet food). For lid 1 this also
         switches the feeder into manual mode (`isAutoMode: false`).
       operationId: closeLid
       parameters:
@@ -150,30 +148,6 @@ paths:
       summary: Return to automatic lid mode
       description: Disables the manual override and re-enables beacon-based automatic lid control.
       operationId: lidAutoMode
-      responses:
-        '200':
-          description: Updated feeder status
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Status'
-  /api/flash/on:
-    post:
-      tags: [flash]
-      summary: Turn the flash LED on
-      operationId: flashOn
-      responses:
-        '200':
-          description: Updated feeder status
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Status'
-  /api/flash/off:
-    post:
-      tags: [flash]
-      summary: Turn the flash LED off
-      operationId: flashOff
       responses:
         '200':
           description: Updated feeder status
@@ -341,8 +315,8 @@ components:
       in: query
       required: false
       description: |
-        Which lid to act on. `lid2` targets the feeding chute (second lid);
-        any other value (or no parameter) targets the main lid (lid 1).
+        Which lid to act on. `lid2` targets the wet food lid (second lid);
+        any other value (or no parameter) targets the dry food lid (lid 1).
       schema:
         type: string
         enum: [lid1, lid2]
@@ -366,10 +340,10 @@ components:
           description: WiFi signal strength in dBm
         isLidOpen:
           type: boolean
-          description: Whether the main lid (lid 1) is open
+          description: Whether the main lid (lid 1, dry food) is open
         isLid2Open:
           type: boolean
-          description: Whether the second lid (lid 2, feeding chute) is open
+          description: Whether the second lid (lid 2, wet food) is open
         isAutoMode:
           type: boolean
           description: Whether automatic beacon-based lid control is active (false = manual override)

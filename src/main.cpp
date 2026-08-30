@@ -50,9 +50,6 @@ int openBeaconThresholdRSSI = -60;
 int closeBeaconThresholdRSSI = -73;
 
 NimBLEScan* pBLEScan;
-// Servo PIN
-constexpr int FLASH_PIN = 4;
-
 
 // === RSSI smoothing ===
 #define RSSI_SAMPLES 8
@@ -309,16 +306,6 @@ void initialiseWebServer()
         serializeJson(doc, out);
         request->send(200, "application/json", out);
     });
-    server.on("/api/flash/on", HTTP_POST, [](AsyncWebServerRequest* request)
-    {
-        digitalWrite(FLASH_PIN, HIGH);
-        request->send(200, "application/json", getStatus());
-    });
-    server.on("/api/flash/off", HTTP_POST, [](AsyncWebServerRequest* request)
-    {
-        digitalWrite(FLASH_PIN, LOW);
-        request->send(200, "application/json", getStatus());
-    });
     server.on("/api/lid/open", HTTP_POST, [](AsyncWebServerRequest* request)
     {
         lidOverride = true;
@@ -547,8 +534,6 @@ void setup()
     nvsMutex = xSemaphoreCreateMutex();
     saveResetReason();
     Serial.println("Setup started!");
-    pinMode(FLASH_PIN, OUTPUT);
-
     loadSettings();
 
     setupMotors();
