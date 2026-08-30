@@ -14,6 +14,10 @@
 #include "motor-utils.h"
 #include "time-utils.h"
 
+void mqttInit();
+void mqttUpdate();
+void mqttPublishState();
+
 portMUX_TYPE rssiMux = portMUX_INITIALIZER_UNLOCKED;
 
 SemaphoreHandle_t nvsMutex = NULL;
@@ -48,6 +52,8 @@ String otherBeaconMAC = "ef:3b:94:f0:f4:d7"; // Milo
 String targetBeaconMAC = "c2:e9:b3:bf:3c:33"; // Nina
 int openBeaconThresholdRSSI = -60;
 int closeBeaconThresholdRSSI = -73;
+// amount used by the HA "Feed amount" number / "Feed" button, persisted in NVS
+int feedAmountSetting = 250;
 
 NimBLEScan* pBLEScan;
 
@@ -161,6 +167,7 @@ void saveSettings()
     prefs.putBytes("cats", cats, catsSize * sizeof(CatItem));
     prefs.putInt("openBeaconRSSI", openBeaconThresholdRSSI);
     prefs.putInt("closeBeaconRSSI", closeBeaconThresholdRSSI);
+    prefs.putInt("feedAmount", feedAmountSetting);
     prefs.end();
     xSemaphoreGive(nvsMutex);
 }
@@ -315,6 +322,7 @@ void initialiseWebServer()
         } else {
             openLid(LID_1);
         }
+        mqttPublishState();
         request->send(200, "application/json", getStatus());
     });
     server.on("/api/lid/close", HTTP_POST, [](AsyncWebServerRequest* request)
@@ -329,11 +337,13 @@ void initialiseWebServer()
             lidOverride = true;
             closeLid(LID_1);
         }
+        mqttPublishState();
         request->send(200, "application/json", getStatus());
     });
     server.on("/api/lid/auto", HTTP_POST, [](AsyncWebServerRequest* request)
     {
         lidOverride = false;
+        mqttPublishState();
         request->send(200, "application/json", getStatus());
     });
     server.on("/api/status/prometheus", HTTP_GET,
@@ -357,6 +367,7 @@ void initialiseWebServer()
         int amount = amountParam->value().toInt();
         feedAmount(amount);
         saveLastFeed();
+        mqttPublishState();
         request->send(200, "application/json", getStatus());
     });
     server.on(
@@ -419,6 +430,7 @@ void initialiseWebServer()
             closeBeaconThresholdRSSI =
                 settings["closeBeaconThresholdRSSI"] | closeBeaconThresholdRSSI;
             saveSettings();
+            mqttPublishState();
             request->send(201, "application/json", "{\"status\":\"ok\"}");
         });
     server.on("/api/schedule", HTTP_GET, [](AsyncWebServerRequest* request)
@@ -511,6 +523,7 @@ void loadSettings()
     }
     openBeaconThresholdRSSI = prefs.getInt("openBeaconRSSI", openBeaconThresholdRSSI);
     closeBeaconThresholdRSSI = prefs.getInt("closeBeaconRSSI", closeBeaconThresholdRSSI);
+    feedAmountSetting = prefs.getInt("feedAmount", feedAmountSetting);
     Serial.printf("Configured thresholds - open %d - close: %d \n", openBeaconThresholdRSSI, closeBeaconThresholdRSSI);
 
     const size_t len2 = prefs.getBytes("cats", &cats, CATS_MAX_SIZE * sizeof(CatItem));
@@ -526,6 +539,8 @@ void loadSettings()
     prefs.end();
     xSemaphoreGive(nvsMutex);
 }
+
+#include "mqtt-utils.h"
 
 void setup()
 {
@@ -618,6 +633,7 @@ void afterWifiConnected()
         });
 
     ArduinoOTA.begin();
+    mqttInit();
     isServerInitialized = true;
 }
 
@@ -761,6 +777,7 @@ void runSchedule()
                         Serial.println("Scheduled: close lid2!");
                         closeLid(LID_2);
                     }
+                    mqttPublishState();
                 }
                 else
                 {
@@ -769,6 +786,7 @@ void runSchedule()
                     feedAmount(schedule[i].amount);
                     saveLastFeed();
                     delay(2000);
+                    mqttPublishState();
                 }
             }
         }
@@ -788,6 +806,9 @@ void loop()
 
     // Check schedule
     runSchedule();
+
+    // MQTT: reconnect if needed, process traffic, periodic state publish
+    mqttUpdate();
 
     ArduinoOTA.handle();
 }

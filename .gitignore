@@ -6,4 +6,5 @@ include/generated/
 .vscode/ipch
 .idea/*
 src/WiFiCredentials.h
+src/MQTTCredentials.h
 platformio.ini

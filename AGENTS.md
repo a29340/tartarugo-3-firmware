@@ -7,7 +7,9 @@ Tartarugo is a smart cat feeder: an ESP32 (esp-wrover-kit, Arduino framework) th
 - `src/main.cpp` — the whole app: BLE scanning, lid logic, HTTP API, NTP, schedule, NVS persistence, OTA.
 - `src/motor-utils.h` — servo (lids) and stepper (feeding) drivers, header-style with globals (no .cpp).
 - `src/time-utils.h` — time helpers, `ScheduleItem` struct, `SCHEDULE_BLOB_VERSION`.
+- `src/mqtt-utils.h` — Home Assistant MQTT layer: client, discovery, state publish, command handlers. **Included at the end of main.cpp** so it can use main.cpp globals.
 - `src/WiFiCredentials.h` — defines `ssid`/`password`. **Gitignored; must be created locally** or the build fails.
+- `src/MQTTCredentials.h` — defines `mqttHost`/`mqttPort`/`mqttUsername`/`mqttPassword`. **Gitignored; must be created locally** or the build fails.
 - `include/generated/openapi.h` — **generated at build time**, do not edit (see OpenAPI below).
 - `openapi.yaml` — API spec, embedded in firmware and served at `/openapi`.
 - `tools/generate_openapi_header.py` — SCons pre-build script (`extra_scripts`) that converts `openapi.yaml` into `include/generated/openapi.h`.
@@ -53,6 +55,26 @@ Endpoints (see `openapi.yaml` for full details): `GET /api/status`, `GET /api/st
 
 **When adding/changing an endpoint: update `openapi.yaml` in the same change.** It is compiled into the firmware and served at `/openapi`, so the spec is the contract. Run the redocly lint afterwards.
 
+## Home Assistant (MQTT)
+
+The device also speaks MQTT as a parallel interface (HTTP API stays intact for the SPA). `src/mqtt-utils.h` connects to the broker from `MQTTCredentials.h` and publishes Home Assistant MQTT discovery configs (retained, re-published on every connect) plus a state topic.
+
+Topics (prefix `tartarugo`):
+
+| Topic | Direction | Payload |
+|---|---|---|
+| `state` | publish | JSON: `lid1` (`auto`/`open`/`close`), `lid2` (`open`/`close`), `wifiRssi`, `openThreshold`, `closeThreshold`, `feedAmount`, `lastFeedTime`, `lastFeedAmount`, `cats[]` |
+| `status` | publish (retained + LWT) | `online` / `offline` — entity availability |
+| `cmd/lid1` | subscribe | `auto` / `open` / `close` |
+| `cmd/lid2` | subscribe | `open` / `close` (never auto-controlled) |
+| `cmd/feed` | subscribe | integer amount → stored as feed amount (persisted, no feed yet) |
+| `cmd/feed_now` | subscribe | `PRESS` (HA button) → feed with the stored amount |
+| `cmd/threshold_open` / `cmd/threshold_close` | subscribe | integer RSSI, clamped to -100..0, persisted via `saveSettings` |
+
+HA entities created by discovery: selects `Lid 1`/`Lid 2`, numbers `Feed amount` (sets the persisted feed amount) and the two RSSI thresholds, a `Feed` button (feeds with the stored amount), sensors WiFi RSSI / Last feed (timestamp) / Last feed amount / Status (full JSON as attributes).
+
+Behavior: state is published every 30s and immediately after lid/feed/settings changes (HTTP or MQTT); reconnect attempts at most every 15s, only while WiFi is connected. `mqttUpdate()` is called from `loop()` — PubSubClient runs single-threaded on the main loop, command callbacks fire from there too.
+
 ## Persistence (ESP NVS via `Preferences`)
 
 - Namespace `catfeeder`: last feed time/amount, schedule blob, cat list, RSSI thresholds. All NVS access is wrapped in `xSemaphoreTake/Give(nvsMutex)`.
@@ -68,6 +90,9 @@ Endpoints (see `openapi.yaml` for full details): `GET /api/status`, `GET /api/st
 
 ## Gotchas
 
+- MQTT `lid1` state is derived from the global `lidOverride` flag: any manual action (even on lid 2 via the HTTP API) makes lid 1 report `open`/`close` instead of `auto` until `/api/lid/auto` or `cmd/lid1=auto`.
+- `cmd/feed` (the `Feed amount` HA number) only stores the amount — use the `Feed` button (`cmd/feed_now`) to actually feed. Note the HTTP `POST /api/feed` still feeds immediately.
+- MQTT credentials/host are compile-time constants in `MQTTCredentials.h`; changing the broker requires a reflash.
 - `openLid`/`closeLid` take a bitmask (`Lid` enum), but the API maps `lid=lid2` to `LID_2` and default to `LID_1`; note `/api/lid/close` does NOT set `lidOverride` for lid 2.
 - The OpenAPI header embeds the spec verbatim; the YAML must stay ASCII-safe for `tools/generate_openapi_header.py` escaping.
 - OTA envs hardcode IPs in `platformio.ini`; `usb` is the safe default for local dev.
