@@ -1,0 +1,10 @@
+extends:
+  - recommended
+rules:
+  # This is a LAN IoT device API with no authentication scheme
+  security-defined: off
+  # No license defined for this project
+  info-license: off
+  # Simple embedded server: failures surface as connection errors / 404,
+  # not as per-operation 4xx responses
+  operation-4xx-response: off

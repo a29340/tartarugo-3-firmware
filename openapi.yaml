@@ -1,0 +1,495 @@
+openapi: 3.0.3
+info:
+  title: Tartarugo Cat Feeder API
+  version: 1.0.0
+  description: |
+    Control and monitoring API for the Tartarugo smart cat feeder (ESP32).
+
+    The feeder watches for BLE beacons worn by the cats and opens/closes the
+    lid (and feeds) automatically based on RSSI thresholds. All actions can
+    be driven manually through this API.
+
+    Notes:
+
+    - Served over plain HTTP on port 80, no authentication.
+    - All responses include CORS headers (`Access-Control-Allow-Origin: *`),
+      and unhandled `OPTIONS` requests return `204 No Content`.
+    - Switching the lid manually puts the feeder into manual mode
+      (`isAutoMode: false`). Call `/api/lid/auto` to re-enable the automatic
+      beacon-based control.
+servers:
+  - url: http://feeder.local
+    description: Replace with the feeder's IP address or hostname (port 80)
+tags:
+  - name: meta
+    description: API description
+  - name: status
+    description: Feeder status
+  - name: lid
+    description: Lid control
+  - name: flash
+    description: Status flash LED
+  - name: feed
+    description: Manual feeding
+  - name: schedule
+    description: Scheduled feeding / lid events
+  - name: settings
+    description: Feeder configuration
+  - name: logs
+    description: Event log
+paths:
+  /openapi:
+    get:
+      tags: [meta]
+      summary: Get this OpenAPI definition
+      description: Serves this document as YAML, embedded in the firmware at build time.
+      operationId: getOpenApiSpec
+      responses:
+        '200':
+          description: 'The OpenAPI definition, in YAML form'
+          content:
+            application/yaml:
+              schema:
+                type: string
+  /api/status:
+    get:
+      tags: [status]
+      summary: Get feeder status
+      operationId: getStatus
+      responses:
+        '200':
+          description: Current feeder status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+              example:
+                wifiSignal: -55
+                isLidOpen: false
+                isLid2Open: false
+                isAutoMode: true
+                lastFeedTime: '2025-03-25T12:00:00'
+                lastFeedAmount: 250
+                lastStartupTime: '2025-03-24T08:15:30'
+                cats:
+                  - name: Nina
+                    rssi: -61
+                    canFeed: true
+                    mac: c2:e9:b3:bf:3c:33
+                    lastSeen: 148320
+                  - name: Milo
+                    rssi: -99
+                    canFeed: false
+                    mac: ef:3b:94:f0:f4:d7
+                    lastSeen: 98210
+  /api/status/prometheus:
+    get:
+      tags: [status]
+      summary: Get status in Prometheus exposition format
+      description: |
+        Metrics: `feeder_cat_rssi{name}`, `feeder_wifi_rssi`, `feeder_is_open`,
+        `feeder_lid2_open`, `feeder_threshold{status=open|close}`.
+
+        Note: the device currently declares the response with
+        `Content-Type: application/json` even though the payload is
+        Prometheus text.
+      operationId: getStatusPrometheus
+      responses:
+        '200':
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP feeder_cat_rssi rssi by cat
+                # TYPE feeder_cat_rssi gauge
+                feeder_cat_rssi{name="Nina"} -61
+                feeder_wifi_rssi -55
+                feeder_is_open 0
+                feeder_lid2_open 0
+                feeder_threshold{status="open"} -60
+                feeder_threshold{status="close"} -73
+  /api/lid/open:
+    post:
+      tags: [lid]
+      summary: Open the lid
+      description: |
+        Opens lid 1 (main lid) or lid 2 (feeding chute). Also switches the
+        feeder into manual mode (`isAutoMode: false`).
+      operationId: openLid
+      parameters:
+        - $ref: '#/components/parameters/Lid'
+      responses:
+        '200':
+          description: Updated feeder status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+  /api/lid/close:
+    post:
+      tags: [lid]
+      summary: Close the lid
+      description: |
+        Closes lid 1 (main lid) or lid 2 (feeding chute). For lid 1 this also
+        switches the feeder into manual mode (`isAutoMode: false`).
+      operationId: closeLid
+      parameters:
+        - $ref: '#/components/parameters/Lid'
+      responses:
+        '200':
+          description: Updated feeder status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+  /api/lid/auto:
+    post:
+      tags: [lid]
+      summary: Return to automatic lid mode
+      description: Disables the manual override and re-enables beacon-based automatic lid control.
+      operationId: lidAutoMode
+      responses:
+        '200':
+          description: Updated feeder status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+  /api/flash/on:
+    post:
+      tags: [flash]
+      summary: Turn the flash LED on
+      operationId: flashOn
+      responses:
+        '200':
+          description: Updated feeder status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+  /api/flash/off:
+    post:
+      tags: [flash]
+      summary: Turn the flash LED off
+      operationId: flashOff
+      responses:
+        '200':
+          description: Updated feeder status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+  /api/feed:
+    post:
+      tags: [feed]
+      summary: Feed immediately
+      description: Runs the feeding stepper with the given amount and records the feed event.
+      operationId: feed
+      parameters:
+        - name: amount
+          in: query
+          required: true
+          description: Amount of food to dispense (stepper steps)
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 65535
+          example: 250
+      responses:
+        '200':
+          description: Updated feeder status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+  /api/schedule:
+    get:
+      tags: [schedule]
+      summary: Get the schedule
+      operationId: getSchedule
+      responses:
+        '200':
+          description: Scheduled entries (max 10)
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 10
+                items:
+                  $ref: '#/components/schemas/ScheduleItem'
+              example:
+                - hour: 6
+                  minute: 30
+                  amount: 250
+                  isLid2: false
+                  lid2Open: true
+                - hour: 8
+                  minute: 0
+                  amount: 0
+                  isLid2: true
+                  lid2Open: true
+    post:
+      tags: [schedule]
+      summary: Replace the schedule
+      description: |
+        Replaces the whole schedule. At most the first 10 entries are stored.
+        Each entry is a feeding event (`isLid2: false`, dispenses `amount`) or
+        a lid-2 open/close event (`isLid2: true`, `lid2Open` selects the action).
+      operationId: setSchedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              maxItems: 10
+              items:
+                $ref: '#/components/schemas/ScheduleItem'
+            example:
+              - hour: 6
+                minute: 30
+                amount: 250
+                isLid2: false
+                lid2Open: true
+      responses:
+        '201':
+          description: Schedule stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Malformed JSON body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/settings:
+    get:
+      tags: [settings]
+      summary: Get settings
+      operationId: getSettings
+      responses:
+        '200':
+          description: Current settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settings'
+              example:
+                openBeaconThresholdRSSI: -60
+                closeBeaconThresholdRSSI: -73
+                cats:
+                  - name: Nina
+                    mac: c2:e9:b3:bf:3c:33
+                    canFeed: true
+                  - name: Milo
+                    mac: ef:3b:94:f0:f4:d7
+                    canFeed: false
+    post:
+      tags: [settings]
+      summary: Replace settings
+      description: |
+        Replaces the whole settings object. At most 5 cats are stored. Missing
+        RSSI thresholds keep their previous values.
+      operationId: setSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Settings'
+            example:
+              openBeaconThresholdRSSI: -60
+              closeBeaconThresholdRSSI: -73
+              cats:
+                - name: Nina
+                  mac: c2:e9:b3:bf:3c:33
+                  canFeed: true
+      responses:
+        '201':
+          description: Settings stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Malformed JSON body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/logs:
+    get:
+      tags: [logs]
+      summary: Get the rolling event log
+      description: Returns the last up-to-50 log entries (boots, feeds, time events, ...).
+      operationId: getLogs
+      responses:
+        '200':
+          description: Rolling log buffer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogResponse'
+components:
+  parameters:
+    Lid:
+      name: lid
+      in: query
+      required: false
+      description: |
+        Which lid to act on. `lid2` targets the feeding chute (second lid);
+        any other value (or no parameter) targets the main lid (lid 1).
+      schema:
+        type: string
+        enum: [lid1, lid2]
+        default: lid1
+      example: lid1
+  schemas:
+    Status:
+      type: object
+      required:
+        - wifiSignal
+        - isLidOpen
+        - isLid2Open
+        - isAutoMode
+        - lastFeedTime
+        - lastFeedAmount
+        - lastStartupTime
+        - cats
+      properties:
+        wifiSignal:
+          type: integer
+          description: WiFi signal strength in dBm
+        isLidOpen:
+          type: boolean
+          description: Whether the main lid (lid 1) is open
+        isLid2Open:
+          type: boolean
+          description: Whether the second lid (lid 2, feeding chute) is open
+        isAutoMode:
+          type: boolean
+          description: Whether automatic beacon-based lid control is active (false = manual override)
+        lastFeedTime:
+          type: string
+          description: Local time of the last feed ("never" if the feeder has not fed yet)
+          example: '2025-03-25T12:00:00'
+        lastFeedAmount:
+          type: integer
+          description: Amount (stepper steps) of the last feed
+        lastStartupTime:
+          type: string
+          description: Local time of the last startup ("unknown" until NTP time has been acquired)
+          example: '2025-03-24T08:15:30'
+        cats:
+          type: array
+          items:
+            $ref: '#/components/schemas/Cat'
+    Cat:
+      type: object
+      required: [name, rssi, canFeed, mac, lastSeen]
+      properties:
+        name:
+          type: string
+        rssi:
+          type: integer
+          description: Smoothed BLE RSSI of the cat's beacon in dBm (-99 when not in range)
+        canFeed:
+          type: boolean
+          description: Whether this cat is allowed to open the lid / trigger feeding
+        mac:
+          type: string
+          description: MAC address of the cat's BLE beacon
+          example: c2:e9:b3:bf:3c:33
+        lastSeen:
+          type: integer
+          description: Milliseconds since boot when the beacon was last seen
+    ScheduleItem:
+      type: object
+      required: [hour, minute, amount, isLid2, lid2Open]
+      properties:
+        hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+        minute:
+          type: integer
+          minimum: 0
+          maximum: 59
+        amount:
+          type: integer
+          minimum: 0
+          maximum: 65535
+          description: Stepper steps to dispense (ignored when `isLid2` is true)
+        isLid2:
+          type: boolean
+          description: Whether this entry controls lid 2 instead of feeding
+        lid2Open:
+          type: boolean
+          description: 'For isLid2 entries: open (true) or close (false) lid 2'
+    Settings:
+      type: object
+      required:
+        - openBeaconThresholdRSSI
+        - closeBeaconThresholdRSSI
+        - cats
+      properties:
+        openBeaconThresholdRSSI:
+          type: integer
+          description: RSSI (dBm) above which the lid opens automatically
+          example: -60
+        closeBeaconThresholdRSSI:
+          type: integer
+          description: RSSI (dBm) below which the lid closes automatically
+          example: -73
+        cats:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/CatSettings'
+    CatSettings:
+      type: object
+      required: [name, mac, canFeed]
+      properties:
+        name:
+          type: string
+          maxLength: 32
+        mac:
+          type: string
+          maxLength: 18
+          example: c2:e9:b3:bf:3c:33
+        canFeed:
+          type: boolean
+    LogResponse:
+      type: object
+      required: [idx, logs]
+      properties:
+        idx:
+          type: integer
+          description: Current write index of the rolling log buffer (0..49)
+        logs:
+          type: object
+          additionalProperties:
+            type: string
+          description: Log entries keyed by buffer index ("00".."49")
+          example:
+            '24': 'Feeding time! 250'
+            '25': '2025-03-25T12:00:00'
+            '26': 'Reboot reason=Power on'
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: Invalid JSON
+    OkResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok

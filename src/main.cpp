@@ -10,6 +10,7 @@
 #include <WiFi.h>
 #include <time.h>
 #include <WiFiCredentials.h>
+#include "generated/openapi.h"
 #include "motor-utils.h"
 #include "time-utils.h"
 
@@ -278,6 +279,12 @@ void initialiseWebServer()
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers",
                                          "Content-Type, Authorization");
 
+    server.on("/openapi", HTTP_GET, [](AsyncWebServerRequest* request)
+    {
+        request->send_P(200, "application/yaml",
+                        reinterpret_cast<const uint8_t*>(openapiSpec),
+                        sizeof(openapiSpec) - 1);
+    });
     server.on("/api/logs", HTTP_GET, [](AsyncWebServerRequest* request)
     {
         xSemaphoreTake(nvsMutex, portMAX_DELAY);
