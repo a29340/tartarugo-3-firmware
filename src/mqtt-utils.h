@@ -1,17 +1,20 @@
 // MQTT integration for Home Assistant.
 //
-// Topics (all under MQTT_BASE_TOPIC):
-//   state               JSON state, published periodically and after changes
-//   status              retained availability, "online" / "offline" (LWT)
-//   cmd/lid1            "auto" | "open" | "close"
-//   cmd/lid2            "open" | "close"
-//   cmd/feed            integer amount -> stored as feed amount (no feed yet)
-//   cmd/feed_now        button press -> feed with the stored amount
-//   cmd/threshold_open  integer RSSI open threshold
-//   cmd/threshold_close integer RSSI close threshold
+// Every device gets its own topic namespace derived from its MAC address, so
+// multiple feeders can share one broker (and one Home Assistant):
+//   <base>/<mac>/state               JSON state, published periodically and after changes
+//   <base>/<mac>/status              retained availability, "online" / "offline" (LWT)
+//   <base>/<mac>/cmd/lid1            "auto" | "open" | "close"
+//   <base>/<mac>/cmd/lid2            "open" | "close"
+//   <base>/<mac>/cmd/feed            integer amount -> stored as feed amount (no feed yet)
+//   <base>/<mac>/cmd/feed_now        button press -> feed with the stored amount
+//   <base>/<mac>/cmd/threshold_open  integer RSSI open threshold
+//   <base>/<mac>/cmd/threshold_close integer RSSI close threshold
+// (<mac> is the device MAC without colons)
 //
 // Home Assistant entities are created automatically through MQTT discovery
 // (homeassistant/<type>/<id>/config, published retained on every connect).
+// Entity unique_ids embed the MAC, so each feeder shows up as its own device.
 //
 // This file is included at the end of main.cpp, so it may use the globals
 // and helpers defined there (cats, thresholds, saveSettings, ...).
@@ -26,15 +29,9 @@
 #include "MQTTCredentials.h"
 
 #define MQTT_BASE_TOPIC "tartarugo"
-#define MQTT_STATE_TOPIC MQTT_BASE_TOPIC "/state"
-#define MQTT_STATUS_TOPIC MQTT_BASE_TOPIC "/status"
-#define MQTT_CMD_LID1 MQTT_BASE_TOPIC "/cmd/lid1"
-#define MQTT_CMD_LID2 MQTT_BASE_TOPIC "/cmd/lid2"
-#define MQTT_CMD_FEED MQTT_BASE_TOPIC "/cmd/feed"
-#define MQTT_CMD_FEED_NOW MQTT_BASE_TOPIC "/cmd/feed_now"
-#define MQTT_CMD_THRESHOLD_OPEN MQTT_BASE_TOPIC "/cmd/threshold_open"
-#define MQTT_CMD_THRESHOLD_CLOSE MQTT_BASE_TOPIC "/cmd/threshold_close"
 #define MQTT_DISCOVERY_PREFIX "homeassistant"
+#define MQTT_TOPIC_LEN 48
+#define MQTT_ENTITY_ID_LEN 48
 
 constexpr unsigned long MQTT_RECONNECT_INTERVAL_MS = 15000;
 constexpr unsigned long MQTT_STATE_PERIOD_MS = 30000;
@@ -43,6 +40,15 @@ WiFiClient mqttWifiClient;
 PubSubClient mqttClient(mqttWifiClient);
 
 String mqttClientId;
+char mqttMacNoColon[13];
+char mqttStateTopic[MQTT_TOPIC_LEN];
+char mqttStatusTopic[MQTT_TOPIC_LEN];
+char mqttCmdLid1Topic[MQTT_TOPIC_LEN];
+char mqttCmdLid2Topic[MQTT_TOPIC_LEN];
+char mqttCmdFeedTopic[MQTT_TOPIC_LEN];
+char mqttCmdFeedNowTopic[MQTT_TOPIC_LEN];
+char mqttCmdThresholdOpenTopic[MQTT_TOPIC_LEN];
+char mqttCmdThresholdCloseTopic[MQTT_TOPIC_LEN];
 unsigned long lastMqttAttempt = 0;
 unsigned long lastMqttStatePublish = 0;
 char mqttCommandBuffer[64];
@@ -66,123 +72,134 @@ void mqttPublishDiscovery()
     if (!mqttClient.connected()) return;
 
     JsonDocument device;
-    device["identifiers"] = "tartarugo";
+    device["identifiers"] = mqttClientId;
     device["name"] = "Tartarugo Cat Feeder";
     device["model"] = "ESP32 cat feeder";
     device["manufacturer"] = "Tartarugo";
 
     auto addCommon = [&](JsonDocument& doc)
     {
-        doc["availability_topic"] = MQTT_STATUS_TOPIC;
+        doc["availability_topic"] = mqttStatusTopic;
         doc["payload_available"] = "online";
         doc["payload_not_available"] = "offline";
         doc["device"] = device;
     };
 
+    char uid[MQTT_ENTITY_ID_LEN];
     JsonDocument d;
 
+    snprintf(uid, sizeof(uid), "tartarugo_%s_lid1", mqttMacNoColon);
     d["name"] = "Lid 1";
-    d["unique_id"] = "tartarugo_lid1";
-    d["command_topic"] = MQTT_CMD_LID1;
-    d["state_topic"] = MQTT_STATE_TOPIC;
+    d["unique_id"] = uid;
+    d["command_topic"] = mqttCmdLid1Topic;
+    d["state_topic"] = mqttStateTopic;
     d["value_template"] = "{{ value_json.lid1 }}";
     JsonArray lid1Options = d["options"].to<JsonArray>();
     lid1Options.add("auto");
     lid1Options.add("open");
     lid1Options.add("close");
     addCommon(d);
-    mqttSendConfig("select", "tartarugo_lid1", d);
+    mqttSendConfig("select", uid, d);
 
     d.clear();
+    snprintf(uid, sizeof(uid), "tartarugo_%s_lid2", mqttMacNoColon);
     d["name"] = "Lid 2";
-    d["unique_id"] = "tartarugo_lid2";
-    d["command_topic"] = MQTT_CMD_LID2;
-    d["state_topic"] = MQTT_STATE_TOPIC;
+    d["unique_id"] = uid;
+    d["command_topic"] = mqttCmdLid2Topic;
+    d["state_topic"] = mqttStateTopic;
     d["value_template"] = "{{ value_json.lid2 }}";
     JsonArray lid2Options = d["options"].to<JsonArray>();
     lid2Options.add("open");
     lid2Options.add("close");
     addCommon(d);
-    mqttSendConfig("select", "tartarugo_lid2", d);
+    mqttSendConfig("select", uid, d);
 
     d.clear();
+    snprintf(uid, sizeof(uid), "tartarugo_%s_feed", mqttMacNoColon);
     d["name"] = "Feed amount";
-    d["unique_id"] = "tartarugo_feed";
-    d["command_topic"] = MQTT_CMD_FEED;
-    d["state_topic"] = MQTT_STATE_TOPIC;
+    d["unique_id"] = uid;
+    d["command_topic"] = mqttCmdFeedTopic;
+    d["state_topic"] = mqttStateTopic;
     d["value_template"] = "{{ value_json.feedAmount }}";
     d["min"] = 1;
     d["max"] = 10000;
     d["step"] = 1;
     addCommon(d);
-    mqttSendConfig("number", "tartarugo_feed", d);
+    mqttSendConfig("number", uid, d);
 
     d.clear();
+    snprintf(uid, sizeof(uid), "tartarugo_%s_feed_button", mqttMacNoColon);
     d["name"] = "Feed";
-    d["unique_id"] = "tartarugo_feed_button";
-    d["command_topic"] = MQTT_CMD_FEED_NOW;
+    d["unique_id"] = uid;
+    d["command_topic"] = mqttCmdFeedNowTopic;
     addCommon(d);
-    mqttSendConfig("button", "tartarugo_feed_button", d);
+    mqttSendConfig("button", uid, d);
 
     d.clear();
+    snprintf(uid, sizeof(uid), "tartarugo_%s_open_threshold", mqttMacNoColon);
     d["name"] = "Open threshold RSSI";
-    d["unique_id"] = "tartarugo_open_threshold";
-    d["command_topic"] = MQTT_CMD_THRESHOLD_OPEN;
-    d["state_topic"] = MQTT_STATE_TOPIC;
+    d["unique_id"] = uid;
+    d["command_topic"] = mqttCmdThresholdOpenTopic;
+    d["state_topic"] = mqttStateTopic;
     d["value_template"] = "{{ value_json.openThreshold }}";
     d["min"] = -100;
     d["max"] = 0;
     d["step"] = 1;
     addCommon(d);
-    mqttSendConfig("number", "tartarugo_open_threshold", d);
+    mqttSendConfig("number", uid, d);
 
     d.clear();
+    snprintf(uid, sizeof(uid), "tartarugo_%s_close_threshold", mqttMacNoColon);
     d["name"] = "Close threshold RSSI";
-    d["unique_id"] = "tartarugo_close_threshold";
-    d["command_topic"] = MQTT_CMD_THRESHOLD_CLOSE;
-    d["state_topic"] = MQTT_STATE_TOPIC;
+    d["unique_id"] = uid;
+    d["command_topic"] = mqttCmdThresholdCloseTopic;
+    d["state_topic"] = mqttStateTopic;
     d["value_template"] = "{{ value_json.closeThreshold }}";
     d["min"] = -100;
     d["max"] = 0;
     d["step"] = 1;
     addCommon(d);
-    mqttSendConfig("number", "tartarugo_close_threshold", d);
+    mqttSendConfig("number", uid, d);
 
     d.clear();
+    snprintf(uid, sizeof(uid), "tartarugo_%s_wifi_rssi", mqttMacNoColon);
     d["name"] = "WiFi RSSI";
-    d["unique_id"] = "tartarugo_wifi_rssi";
-    d["state_topic"] = MQTT_STATE_TOPIC;
+    d["unique_id"] = uid;
+    d["state_topic"] = mqttStateTopic;
     d["value_template"] = "{{ value_json.wifiRssi }}";
     d["unit_of_measurement"] = "dBm";
     d["device_class"] = "signal_strength";
     addCommon(d);
-    mqttSendConfig("sensor", "tartarugo_wifi_rssi", d);
+    mqttSendConfig("sensor", uid, d);
 
     d.clear();
+    snprintf(uid, sizeof(uid), "tartarugo_%s_last_feed", mqttMacNoColon);
     d["name"] = "Last feed";
-    d["unique_id"] = "tartarugo_last_feed";
-    d["state_topic"] = MQTT_STATE_TOPIC;
+    d["unique_id"] = uid;
+    d["state_topic"] = mqttStateTopic;
     d["value_template"] = "{{ value_json.lastFeedTime }}";
     d["device_class"] = "timestamp";
     addCommon(d);
-    mqttSendConfig("sensor", "tartarugo_last_feed", d);
+    mqttSendConfig("sensor", uid, d);
 
     d.clear();
+    snprintf(uid, sizeof(uid), "tartarugo_%s_last_feed_amount", mqttMacNoColon);
     d["name"] = "Last feed amount";
-    d["unique_id"] = "tartarugo_last_feed_amount";
-    d["state_topic"] = MQTT_STATE_TOPIC;
+    d["unique_id"] = uid;
+    d["state_topic"] = mqttStateTopic;
     d["value_template"] = "{{ value_json.lastFeedAmount }}";
     addCommon(d);
-    mqttSendConfig("sensor", "tartarugo_last_feed_amount", d);
+    mqttSendConfig("sensor", uid, d);
 
     d.clear();
+    snprintf(uid, sizeof(uid), "tartarugo_%s_status", mqttMacNoColon);
     d["name"] = "Status";
-    d["unique_id"] = "tartarugo_status";
-    d["state_topic"] = MQTT_STATE_TOPIC;
+    d["unique_id"] = uid;
+    d["state_topic"] = mqttStateTopic;
     d["value_template"] = "{{ value_json | tojson }}";
     d["json_attributes_template"] = "{{ value_json }}";
     addCommon(d);
-    mqttSendConfig("sensor", "tartarugo_status", d);
+    mqttSendConfig("sensor", uid, d);
 }
 
 void mqttPublishState()
@@ -210,7 +227,7 @@ void mqttPublishState()
     }
     String out;
     serializeJson(doc, out);
-    if (!mqttClient.publish(MQTT_STATE_TOPIC, out.c_str()))
+    if (!mqttClient.publish(mqttStateTopic, out.c_str()))
     {
         Serial.printf("MQTT: state publish failed (len=%u)\n", out.length());
     }
@@ -227,7 +244,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     mqttCommandBuffer[length] = '\0';
     const String cmd = mqttCommandBuffer;
 
-    if (strcmp(topic, MQTT_CMD_LID1) == 0)
+    if (strcmp(topic, mqttCmdLid1Topic) == 0)
     {
         if (cmd == "auto")
         {
@@ -249,7 +266,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
             return;
         }
     }
-    else if (strcmp(topic, MQTT_CMD_LID2) == 0)
+    else if (strcmp(topic, mqttCmdLid2Topic) == 0)
     {
         if (cmd == "open")
         {
@@ -266,7 +283,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
             return;
         }
     }
-    else if (strcmp(topic, MQTT_CMD_FEED) == 0)
+    else if (strcmp(topic, mqttCmdFeedTopic) == 0)
     {
         const int amount = cmd.toInt();
         if (amount <= 0 || amount > 10000)
@@ -277,7 +294,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
         feedAmountSetting = amount;
         saveSettings();
     }
-    else if (strcmp(topic, MQTT_CMD_FEED_NOW) == 0)
+    else if (strcmp(topic, mqttCmdFeedNowTopic) == 0)
     {
         if (cmd != "PRESS")
         {
@@ -287,7 +304,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
         feedAmount(feedAmountSetting);
         saveLastFeed();
     }
-    else if (strcmp(topic, MQTT_CMD_THRESHOLD_OPEN) == 0)
+    else if (strcmp(topic, mqttCmdThresholdOpenTopic) == 0)
     {
         const int value = cmd.toInt();
         if (value < -100 || value > 0)
@@ -298,7 +315,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
         openBeaconThresholdRSSI = value;
         saveSettings();
     }
-    else if (strcmp(topic, MQTT_CMD_THRESHOLD_CLOSE) == 0)
+    else if (strcmp(topic, mqttCmdThresholdCloseTopic) == 0)
     {
         const int value = cmd.toInt();
         if (value < -100 || value > 0)
@@ -320,7 +337,34 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
 void mqttInit()
 {
     const String mac = WiFi.macAddress();
-    mqttClientId = String("tartarugo-") + mac;
+    int j = 0;
+    for (int i = 0; i < mac.length() && j < 12; i++)
+    {
+        if (mac[i] != ':')
+        {
+            mqttMacNoColon[j++] = mac[i];
+        }
+    }
+    mqttMacNoColon[j] = '\0';
+
+    mqttClientId = String(MQTT_BASE_TOPIC) + "-" + mac;
+    snprintf(mqttStateTopic, sizeof(mqttStateTopic),
+             MQTT_BASE_TOPIC "/%s/state", mqttMacNoColon);
+    snprintf(mqttStatusTopic, sizeof(mqttStatusTopic),
+             MQTT_BASE_TOPIC "/%s/status", mqttMacNoColon);
+    snprintf(mqttCmdLid1Topic, sizeof(mqttCmdLid1Topic),
+             MQTT_BASE_TOPIC "/%s/cmd/lid1", mqttMacNoColon);
+    snprintf(mqttCmdLid2Topic, sizeof(mqttCmdLid2Topic),
+             MQTT_BASE_TOPIC "/%s/cmd/lid2", mqttMacNoColon);
+    snprintf(mqttCmdFeedTopic, sizeof(mqttCmdFeedTopic),
+             MQTT_BASE_TOPIC "/%s/cmd/feed", mqttMacNoColon);
+    snprintf(mqttCmdFeedNowTopic, sizeof(mqttCmdFeedNowTopic),
+             MQTT_BASE_TOPIC "/%s/cmd/feed_now", mqttMacNoColon);
+    snprintf(mqttCmdThresholdOpenTopic, sizeof(mqttCmdThresholdOpenTopic),
+             MQTT_BASE_TOPIC "/%s/cmd/threshold_open", mqttMacNoColon);
+    snprintf(mqttCmdThresholdCloseTopic, sizeof(mqttCmdThresholdCloseTopic),
+             MQTT_BASE_TOPIC "/%s/cmd/threshold_close", mqttMacNoColon);
+
     mqttClient.setServer(mqttHost, mqttPort);
     mqttClient.setCallback(mqttCallback);
 }
@@ -338,7 +382,7 @@ void mqttReconnectIfNeeded()
         mqttClientId.c_str(),
         mqttUsername,
         mqttPassword,
-        MQTT_STATUS_TOPIC,
+        mqttStatusTopic,
         0,
         true,
         "offline",
@@ -351,13 +395,13 @@ void mqttReconnectIfNeeded()
     }
     Serial.println("MQTT: connected");
 
-    mqttClient.publish(MQTT_STATUS_TOPIC, "online", true);
-    mqttClient.subscribe(MQTT_CMD_LID1);
-    mqttClient.subscribe(MQTT_CMD_LID2);
-    mqttClient.subscribe(MQTT_CMD_FEED);
-    mqttClient.subscribe(MQTT_CMD_FEED_NOW);
-    mqttClient.subscribe(MQTT_CMD_THRESHOLD_OPEN);
-    mqttClient.subscribe(MQTT_CMD_THRESHOLD_CLOSE);
+    mqttClient.publish(mqttStatusTopic, "online", true);
+    mqttClient.subscribe(mqttCmdLid1Topic);
+    mqttClient.subscribe(mqttCmdLid2Topic);
+    mqttClient.subscribe(mqttCmdFeedTopic);
+    mqttClient.subscribe(mqttCmdFeedNowTopic);
+    mqttClient.subscribe(mqttCmdThresholdOpenTopic);
+    mqttClient.subscribe(mqttCmdThresholdCloseTopic);
     mqttPublishDiscovery();
     mqttPublishState();
 }

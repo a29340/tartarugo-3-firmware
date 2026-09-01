@@ -59,7 +59,7 @@ Endpoints (see `openapi.yaml` for full details): `GET /api/status`, `GET /api/st
 
 The device also speaks MQTT as a parallel interface (HTTP API stays intact for the SPA). `src/mqtt-utils.h` connects to the broker from `MQTTCredentials.h` and publishes Home Assistant MQTT discovery configs (retained, re-published on every connect) plus a state topic.
 
-Topics (prefix `tartarugo`):
+Topics (prefix `tartarugo/<mac>`, where `<mac>` is the device MAC without colons — every feeder has its own namespace and its own HA device, so multiple feeders can share one broker):
 
 | Topic | Direction | Payload |
 |---|---|---|
@@ -74,6 +74,8 @@ Topics (prefix `tartarugo`):
 HA entities created by discovery: selects `Lid 1`/`Lid 2`, numbers `Feed amount` (sets the persisted feed amount) and the two RSSI thresholds, a `Feed` button (feeds with the stored amount), sensors WiFi RSSI / Last feed (timestamp) / Last feed amount / Status (full JSON as attributes).
 
 Behavior: state is published every 30s and immediately after lid/feed/settings changes (HTTP or MQTT); reconnect attempts at most every 15s, only while WiFi is connected. `mqttUpdate()` is called from `loop()` — PubSubClient runs single-threaded on the main loop, command callbacks fire from there too.
+
+Multi-device: MQTT client ID (`tartarugo-<mac>`), all topics, HA device identifiers and entity `unique_id`s embed the MAC, so each feeder is a separate device in HA (all named "Tartarugo Cat Feeder" — rename them in HA). Discovery topics are `homeassistant/<type>/tartarugo_<mac>_<entity>/config`.
 
 ## Persistence (ESP NVS via `Preferences`)
 

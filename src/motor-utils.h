@@ -18,7 +18,7 @@ Servo lidServo;
 Servo lid2Servo;
 constexpr int servoPIN = 15;
 constexpr int lid2ServoPIN = 4;
-// constexpr int SERVO_DURATION_TOLERANCE_MS = 4000;
+constexpr int SERVO_DURATION_TOLERANCE_MS = 4000;
 
 struct SmoothServo
 {
@@ -40,25 +40,25 @@ void updateSmoothMove(SmoothServo& motion)
     const unsigned long now = millis();
     const unsigned long elapsed = now - motion.startTime;
 
-    // if (elapsed >=
-    //     (static_cast<unsigned long>(motion.duration) + SERVO_DURATION_TOLERANCE_MS))
-    // {
-    //     motion.active = false;
-    //     return;
-    // }
-    //
-    if (elapsed >= static_cast<unsigned long>(motion.duration))
+    if (elapsed >=
+        (static_cast<unsigned long>(motion.duration) + SERVO_DURATION_TOLERANCE_MS))
     {
-        motion.servo->write(motion.to); // final angle
         motion.active = false;
         return;
     }
 
-    // const float progress = static_cast<float>(elapsed) / motion.duration; // 0..1
-    // // cosine ease-in/out
-    // const float factor = (1 - cos(progress * PI)) / 2;
-    // const int angle = motion.from + (motion.to - motion.from) * factor;
+    if (elapsed >= static_cast<unsigned long>(motion.duration))
+    {
+        motion.servo->write(motion.to); // final angle
+        return;
+    }
 
+    const float progress = static_cast<float>(elapsed) / motion.duration; // 0..1
+    // cosine ease-in/out
+    const float factor = (1 - cos(progress * PI)) / 2;
+    const int angle = motion.from + (motion.to - motion.from) * factor;
+
+    motion.servo->write(angle);
 }
 
 void startSmoothMove(SmoothServo& motion, const int pin, Servo& servo,
@@ -98,7 +98,7 @@ void openLid(const int which)
     {
         if (!lidOpen)
         {
-            startSmoothMove(lidMotion, servoPIN, lidServo, closedAngle, openAngle, 50, 100);
+            startSmoothMove(lidMotion, servoPIN, lidServo, 180, 0, 50, 1000);
         }
         lidOpen = true;
         lastOpen = millis();
@@ -108,7 +108,7 @@ void openLid(const int which)
     {
         if (!lid2Open)
         {
-            startSmoothMove(lid2Motion, lid2ServoPIN, lid2Servo, closedAngle, openAngle, 50, 100);
+            startSmoothMove(lid2Motion, lid2ServoPIN, lid2Servo, 55, 180, 50, 1000);
         }
         lid2Open = true;
         lastLid2Open = millis();
@@ -129,7 +129,7 @@ void closeLid(const int which)
     {
         if (lidOpen)
         {
-            startSmoothMove(lidMotion, servoPIN, lidServo, openAngle, closedAngle, 50, 100);
+            startSmoothMove(lidMotion, servoPIN, lidServo, 0, 180, 50, 1000);
         }
         lidOpen = false;
         lastClosed = millis();
@@ -139,7 +139,7 @@ void closeLid(const int which)
     {
         if (lid2Open)
         {
-            startSmoothMove(lid2Motion, lid2ServoPIN, lid2Servo, openAngle, closedAngle, 50, 100);
+            startSmoothMove(lid2Motion, lid2ServoPIN, lid2Servo, 180, 55, 50, 1000);
         }
         lid2Open = false;
         lastLid2Closed = millis();
