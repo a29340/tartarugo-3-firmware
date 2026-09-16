@@ -315,11 +315,11 @@ void initialiseWebServer()
     });
     server.on("/api/lid/open", HTTP_POST, [](AsyncWebServerRequest* request)
     {
-        lidOverride = true;
         const AsyncWebParameter* lidParam = request->getParam("lid");
         if (lidParam && lidParam->value() == "lid2") {
             openLid(LID_2);
         } else {
+            lidOverride = true;
             openLid(LID_1);
         }
         mqttPublishState();
@@ -712,22 +712,24 @@ void checkLid(const unsigned long now)
     }
 
 
-    if (now - lastClosed > 10000 && !lidOpen && lidMotion.attached) {
+    if (now - lastClosed > 3000 && !lidOpen && lidMotion.attached && !lidMotion.active) {
         lidMotion.servo->detach();
         lidMotion.attached = false;
     }
 
-    if (now - lastLid2Closed > 10000 && !lid2Open && lid2Motion.attached) {
+    if (now - lastOpen > 3000 && lidOpen && lidMotion.attached && !lidMotion.active) {
+        lidMotion.servo->detach();
+        lidMotion.attached = false;
+    }
+
+    if (now - lastLid2Closed > 3000 && !lid2Open && lid2Motion.attached && !lidMotion.active) {
         lid2Motion.servo->detach();
         lid2Motion.attached = false;
     }
-}
 
-void checkHealth() {
-    healthCounter++;
-    if (healthCounter >= 100)
-    {
-        ESP.restart();
+    if (now - lastLid2Open > 3000 && lid2Open && lid2Motion.attached && !lidMotion.active) {
+        lid2Motion.servo->detach();
+        lid2Motion.attached = false;
     }
 }
 
@@ -749,7 +751,6 @@ void everyPeriod(const unsigned int period)
     {
         checkWiFiAndPrint();
         checkLid(now);
-        // checkHealth();
         checkLastSeen(now);
         lastExecution = now;
     }

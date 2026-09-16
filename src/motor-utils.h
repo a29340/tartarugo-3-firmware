@@ -74,7 +74,7 @@ void startSmoothMove(SmoothServo& motion, const int pin, Servo& servo,
     motion.startTime = millis();
     motion.active = true;
     if (!motion.attached) {
-        motion.servo->attach(motion.pin, 500, 2400);
+        motion.servo->attach(motion.pin);
         motion.attached = true;
     }
 }
@@ -98,7 +98,7 @@ void openLid(const int which)
     {
         if (!lidOpen)
         {
-            startSmoothMove(lidMotion, servoPIN, lidServo, 180, 0, 50, 1000);
+            startSmoothMove(lidMotion, servoPIN, lidServo, 100, 0, 50, 1000);
         }
         lidOpen = true;
         lastOpen = millis();
@@ -118,7 +118,7 @@ void openLid(const int which)
 
 void keepClosed()
 {
-    lidMotion.servo->attach(servoPIN, 500, 2400);
+    lidMotion.servo->attach(servoPIN);
     lidMotion.servo->write(lidOpen ? openAngle : closedAngle);
     lidMotion.attached = true;
 }
@@ -129,7 +129,7 @@ void closeLid(const int which)
     {
         if (lidOpen)
         {
-            startSmoothMove(lidMotion, servoPIN, lidServo, 0, 180, 50, 1000);
+            startSmoothMove(lidMotion, servoPIN, lidServo, 0, 100, 50, 1000);
         }
         lidOpen = false;
         lastClosed = millis();
