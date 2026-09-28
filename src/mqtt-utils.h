@@ -16,6 +16,11 @@
 // (homeassistant/<type>/<id>/config, published retained on every connect).
 // Entity unique_ids embed the MAC, so each feeder shows up as its own device.
 //
+// One extra "RSSI <name>" sensor is discovered per configured cat
+// (unique_id tartarugo_<mac>_cat_<catmac>), reading that cat's rssi from the
+// state JSON by MAC. Entities are added/removed dynamically as the cat list
+// changes (stale entities are removed by publishing null to their config topic).
+//
 // This file is included at the end of main.cpp, so it may use the globals
 // and helpers defined there (cats, thresholds, saveSettings, ...).
 
@@ -53,6 +58,39 @@ unsigned long lastMqttAttempt = 0;
 unsigned long lastMqttStatePublish = 0;
 char mqttCommandBuffer[64];
 
+// Per-cat RSSI sensors that have been discovered, so stale entities can be
+// removed when the cat list changes.
+struct MqttPublishedCat
+{
+    char uid[MQTT_ENTITY_ID_LEN];
+    char mac[MAX_MAC_LEN];
+    char name[MAX_NAME_LEN];
+};
+
+MqttPublishedCat publishedCats[CATS_MAX_SIZE];
+int publishedCatCount = 0;
+
+void mqttStripMacColons(const char* mac, char* out, const size_t outLen)
+{
+    int j = 0;
+    for (size_t i = 0; mac[i] != '\0' && j < (int)outLen - 1; i++)
+    {
+        if (mac[i] != ':')
+        {
+            out[j++] = mac[i];
+        }
+    }
+    out[j] = '\0';
+}
+
+void mqttFillDevice(JsonDocument& doc)
+{
+    doc["identifiers"] = mqttClientId;
+    doc["name"] = "Tartarugo Cat Feeder";
+    doc["model"] = "ESP32 cat feeder";
+    doc["manufacturer"] = "Tartarugo";
+}
+
 void mqttSendConfig(const char* type, const char* entityId, JsonDocument& doc)
 {
     char topic[96];
@@ -72,10 +110,7 @@ void mqttPublishDiscovery()
     if (!mqttClient.connected()) return;
 
     JsonDocument device;
-    device["identifiers"] = mqttClientId;
-    device["name"] = "Tartarugo Cat Feeder";
-    device["model"] = "ESP32 cat feeder";
-    device["manufacturer"] = "Tartarugo";
+    mqttFillDevice(device);
 
     auto addCommon = [&](JsonDocument& doc)
     {
@@ -202,6 +237,138 @@ void mqttPublishDiscovery()
     mqttSendConfig("sensor", uid, d);
 }
 
+bool mqttCatSetChanged()
+{
+    if ((int)catsSize != publishedCatCount)
+    {
+        return true;
+    }
+    for (size_t i = 0; i < catsSize; i++)
+    {
+        int slot = -1;
+        for (int j = 0; j < publishedCatCount; j++)
+        {
+            if (strcmp(cats[i].mac, publishedCats[j].mac) == 0)
+            {
+                slot = j;
+                break;
+            }
+        }
+        if (slot < 0 || strcmp(cats[i].name, publishedCats[slot].name) != 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void mqttPublishCatDiscovery(const bool force)
+{
+    if (!mqttClient.connected())
+    {
+        return;
+    }
+
+    // Drop entities for cats that no longer exist, compacting the list
+    int write = 0;
+    for (int i = 0; i < publishedCatCount; i++)
+    {
+        bool stillExists = false;
+        for (size_t c = 0; c < catsSize; c++)
+        {
+            if (strcmp(cats[c].mac, publishedCats[i].mac) == 0)
+            {
+                stillExists = true;
+                break;
+            }
+        }
+        if (stillExists)
+        {
+            if (write != i)
+            {
+                publishedCats[write] = publishedCats[i];
+            }
+            write++;
+        }
+        else
+        {
+            char topic[96];
+            snprintf(topic, sizeof(topic), "%s/sensor/%s/config",
+                     MQTT_DISCOVERY_PREFIX, publishedCats[i].uid);
+            Serial.printf("MQTT: removing cat entity %s\n",
+                          publishedCats[i].uid);
+            if (!mqttClient.publish(topic, "null", true))
+            {
+                Serial.printf("MQTT: failed to remove discovery for %s\n",
+                              publishedCats[i].uid);
+            }
+        }
+    }
+    publishedCatCount = write;
+
+    JsonDocument device;
+    mqttFillDevice(device);
+
+    for (size_t i = 0; i < catsSize; i++)
+    {
+        int slot = -1;
+        for (int j = 0; j < publishedCatCount; j++)
+        {
+            if (strcmp(cats[i].mac, publishedCats[j].mac) == 0)
+            {
+                slot = j;
+                break;
+            }
+        }
+        if (!force && slot >= 0 &&
+            strcmp(cats[i].name, publishedCats[slot].name) == 0)
+        {
+            continue;
+        }
+
+        char catMacNoColon[13];
+        mqttStripMacColons(cats[i].mac, catMacNoColon, sizeof(catMacNoColon));
+
+        char uid[MQTT_ENTITY_ID_LEN];
+        snprintf(uid, sizeof(uid), "tartarugo_%s_cat_%s",
+                 mqttMacNoColon, catMacNoColon);
+
+        JsonDocument d;
+        d["name"] = "RSSI " + String(cats[i].name);
+        d["unique_id"] = uid;
+        d["state_topic"] = mqttStateTopic;
+        char tpl[140];
+        snprintf(tpl, sizeof(tpl),
+                 "{{ value_json.cats | selectattr('mac', 'equalto', '%s') | map(attribute='rssi') | first | default(none) }}",
+                 cats[i].mac);
+        d["value_template"] = tpl;
+        d["unit_of_measurement"] = "dBm";
+        d["device_class"] = "signal_strength";
+        d["availability_topic"] = mqttStatusTopic;
+        d["payload_available"] = "online";
+        d["payload_not_available"] = "offline";
+        d["device"] = device;
+        mqttSendConfig("sensor", uid, d);
+
+        if (slot >= 0)
+        {
+            strlcpy(publishedCats[slot].uid, uid, sizeof(publishedCats[slot].uid));
+            strlcpy(publishedCats[slot].name, cats[i].name,
+                    sizeof(publishedCats[slot].name));
+        }
+        else
+        {
+            strlcpy(publishedCats[publishedCatCount].uid, uid,
+                    sizeof(publishedCats[publishedCatCount].uid));
+            strlcpy(publishedCats[publishedCatCount].mac, cats[i].mac,
+                    sizeof(publishedCats[publishedCatCount].mac));
+            strlcpy(publishedCats[publishedCatCount].name, cats[i].name,
+                    sizeof(publishedCats[publishedCatCount].name));
+            publishedCatCount++;
+        }
+    }
+}
+
 void mqttPublishState()
 {
     if (!mqttClient.connected()) return;
@@ -221,6 +388,7 @@ void mqttPublishState()
     {
         JsonObject cat = catsJson.add<JsonObject>();
         cat["name"] = cats[i].name;
+        cat["mac"] = cats[i].mac;
         cat["rssi"] = lastAvgRSSI[i];
         cat["canFeed"] = cats[i].canFeed;
         cat["lastSeen"] = lastSeenTimestamp[i];
@@ -336,15 +504,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
 void mqttInit()
 {
     const String mac = WiFi.macAddress();
-    int j = 0;
-    for (int i = 0; i < mac.length() && j < 12; i++)
-    {
-        if (mac[i] != ':')
-        {
-            mqttMacNoColon[j++] = mac[i];
-        }
-    }
-    mqttMacNoColon[j] = '\0';
+    mqttStripMacColons(mac.c_str(), mqttMacNoColon, sizeof(mqttMacNoColon));
 
     mqttClientId = String(MQTT_BASE_TOPIC) + "-" + mac;
     snprintf(mqttStateTopic, sizeof(mqttStateTopic),
@@ -402,6 +562,7 @@ void mqttReconnectIfNeeded()
     mqttClient.subscribe(mqttCmdThresholdOpenTopic);
     mqttClient.subscribe(mqttCmdThresholdCloseTopic);
     mqttPublishDiscovery();
+    mqttPublishCatDiscovery(true);
     mqttPublishState();
 }
 
@@ -409,6 +570,10 @@ void mqttUpdate()
 {
     mqttReconnectIfNeeded();
     mqttClient.loop();
+    if (mqttClient.connected() && mqttCatSetChanged())
+    {
+        mqttPublishCatDiscovery(false);
+    }
     if (millis() - lastMqttStatePublish >= MQTT_STATE_PERIOD_MS)
     {
         mqttPublishState();

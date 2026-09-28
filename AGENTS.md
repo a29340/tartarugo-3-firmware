@@ -63,7 +63,7 @@ Topics (prefix `tartarugo/<mac>`, where `<mac>` is the device MAC without colons
 
 | Topic | Direction | Payload |
 |---|---|---|
-| `state` | publish | JSON: `lid1` (`auto`/`open`/`close`), `lid2` (`open`/`close`), `wifiRssi`, `openThreshold`, `closeThreshold`, `feedAmount`, `lastFeedTime`, `lastFeedAmount`, `cats[]` |
+| `state` | publish | JSON: `lid1` (`auto`/`open`/`close`), `lid2` (`open`/`close`), `wifiRssi`, `openThreshold`, `closeThreshold`, `feedAmount`, `lastFeedTime`, `lastFeedAmount`, `cats[]` (each: `name`, `mac`, `rssi`, `canFeed`, `lastSeen`) |
 | `status` | publish (retained + LWT) | `online` / `offline` — entity availability |
 | `cmd/lid1` | subscribe | `auto` / `open` / `close` |
 | `cmd/lid2` | subscribe | `open` / `close` (never auto-controlled) |
@@ -72,6 +72,8 @@ Topics (prefix `tartarugo/<mac>`, where `<mac>` is the device MAC without colons
 | `cmd/threshold_open` / `cmd/threshold_close` | subscribe | integer RSSI, clamped to -100..0, persisted via `saveSettings` |
 
 HA entities created by discovery: selects `Lid 1`/`Lid 2`, numbers `Feed amount` (sets the persisted feed amount) and the two RSSI thresholds, a `Feed` button (feeds with the stored amount), sensors WiFi RSSI / Last feed (timestamp) / Last feed amount / Status (full JSON as attributes).
+
+Per-cat RSSI: one `RSSI <name>` sensor (dBm, `signal_strength`) is discovered per configured cat, `unique_id` `tartarugo_<mac>_cat_<catmac>`, value pulled from `cats[]` by MAC. Entities are managed dynamically: when the cat list changes (add/remove/rename via `POST /api/settings`), `mqttUpdate()` re-discovers — new cats get a sensor, removed cats' sensors are deleted by publishing `null` to their config topic.
 
 Behavior: state is published every 30s and immediately after lid/feed/settings changes (HTTP or MQTT); reconnect attempts at most every 15s, only while WiFi is connected. `mqttUpdate()` is called from `loop()` — PubSubClient runs single-threaded on the main loop, command callbacks fire from there too.
 
