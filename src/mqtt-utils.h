@@ -270,7 +270,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     {
         if (cmd == "open")
         {
-            lidOverride = true;
             openLid(LID_2);
         }
         else if (cmd == "close")

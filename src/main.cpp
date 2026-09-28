@@ -712,22 +712,12 @@ void checkLid(const unsigned long now)
     }
 
 
-    if (now - lastClosed > 3000 && !lidOpen && lidMotion.attached && !lidMotion.active) {
+    if (now - lastClosed > 3000 && now - lastOpen > 3000 && lidMotion.attached) {
         lidMotion.servo->detach();
         lidMotion.attached = false;
     }
 
-    if (now - lastOpen > 3000 && lidOpen && lidMotion.attached && !lidMotion.active) {
-        lidMotion.servo->detach();
-        lidMotion.attached = false;
-    }
-
-    if (now - lastLid2Closed > 3000 && !lid2Open && lid2Motion.attached && !lidMotion.active) {
-        lid2Motion.servo->detach();
-        lid2Motion.attached = false;
-    }
-
-    if (now - lastLid2Open > 3000 && lid2Open && lid2Motion.attached && !lidMotion.active) {
+    if (now - lastLid2Closed > 3000 && now - lastLid2Open > 3000 && lid2Motion.attached ) {
         lid2Motion.servo->detach();
         lid2Motion.attached = false;
     }
