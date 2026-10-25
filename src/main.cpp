@@ -179,6 +179,39 @@ void saveSettings()
     xSemaphoreGive(nvsMutex);
 }
 
+void savePotCalibration()
+{
+    xSemaphoreTake(nvsMutex, portMAX_DELAY);
+    prefs.begin("catfeeder", false);
+    PotCalibrationBlob blob;
+    blob.version = POT_CALIBRATION_BLOB_VERSION;
+    blob.lid1 = lid1Pot;
+    blob.lid2 = lid2Pot;
+    prefs.putBytes("potCalib", &blob, sizeof(blob));
+    prefs.end();
+    xSemaphoreGive(nvsMutex);
+}
+
+bool loadPotCalibration()
+{
+    xSemaphoreTake(nvsMutex, portMAX_DELAY);
+    prefs.begin("catfeeder", true);
+    PotCalibrationBlob blob;
+    const size_t len = prefs.getBytes("potCalib", &blob, sizeof(blob));
+    prefs.end();
+    xSemaphoreGive(nvsMutex);
+    if (len != sizeof(blob) || blob.version != POT_CALIBRATION_BLOB_VERSION)
+    {
+        return false;
+    }
+    lid1Pot = blob.lid1;
+    lid2Pot = blob.lid2;
+    // re-check the span so a corrupted blob can't break the angle estimate
+    lid1Pot.valid = abs(lid1Pot.potOpen - lid1Pot.potClosed) >= POT_MIN_SPAN;
+    lid2Pot.valid = abs(lid2Pot.potOpen - lid2Pot.potClosed) >= POT_MIN_SPAN;
+    return true;
+}
+
 
 int averageRSSI(int ci, int rssi)
 {
@@ -210,6 +243,9 @@ String getStatus()
     status["isLidOpen"] = lidOpen;
     status["isLid2Open"] = lid2Open;
     status["isAutoMode"] = !lidOverride;
+    // estimated arm angle from the pot (-1 = position feedback unavailable)
+    status["lid1Position"] = estimateLid1Angle();
+    status["lid2Position"] = estimateLid2Angle();
     status["lastFeedTime"] =
         lastFeedAmount == 0 ? "never" : printDateTime(&lastFeedTime).c_str();
     status["lastFeedAmount"] = lastFeedAmount;
@@ -252,6 +288,16 @@ String getStatusProm()
         "# HELP feeder_lid2_open indicates if the second lid is open or not\n# "
         "TYPE feeder_lid2_open gauge\n");
     out = out + String("feeder_lid2_open " + String(lid2Open) + "\n");
+    out = out + String(
+        "# HELP feeder_lid1_position estimated lid 1 arm position in degrees "
+        "(-1 unknown)\n# TYPE feeder_lid1_position gauge\n");
+    out = out + String("feeder_lid1_position " +
+                       String(estimateLid1Angle()) + "\n");
+    out = out + String(
+        "# HELP feeder_lid2_position estimated lid 2 arm position in degrees "
+        "(-1 unknown)\n# TYPE feeder_lid2_position gauge\n");
+    out = out + String("feeder_lid2_position " +
+                       String(estimateLid2Angle()) + "\n");
     out = out + String(
         "# HELP feeder_threshold open or close rssi threshold\n# "
         "TYPE feeder_threshold gauge\n");
@@ -352,6 +398,35 @@ void initialiseWebServer()
         lidOverride = false;
         mqttPublishState();
         request->send(200, "application/json", getStatus());
+    });
+    server.on("/api/calibrate", HTTP_POST, [](AsyncWebServerRequest* request)
+    {
+        if (lidMotion.active || lid2Motion.active)
+        {
+            request->send(409, "application/json",
+                          "{\"error\":\"A lid is moving, try again later\"}");
+            return;
+        }
+        Serial.println("Recalibrating lid pots...");
+        calibrateLids();
+        savePotCalibration();
+        lidMotion.attached = true;
+        lid2Motion.attached = true;
+        JsonDocument doc;
+        const JsonObject root = doc.to<JsonObject>();
+        root["status"] = "ok";
+        const JsonObject lid1Json = root["lid1"].to<JsonObject>();
+        lid1Json["open"] = lid1Pot.potOpen;
+        lid1Json["closed"] = lid1Pot.potClosed;
+        lid1Json["valid"] = lid1Pot.valid;
+        const JsonObject lid2Json = root["lid2"].to<JsonObject>();
+        lid2Json["open"] = lid2Pot.potOpen;
+        lid2Json["closed"] = lid2Pot.potClosed;
+        lid2Json["valid"] = lid2Pot.valid;
+        String out;
+        serializeJson(doc, out);
+        mqttPublishState();
+        request->send(200, "application/json", out);
     });
     server.on("/api/status/prometheus", HTTP_GET,
               [](AsyncWebServerRequest* request)
@@ -560,6 +635,22 @@ void setup()
 
     setupMotors();
 
+    // Position pots: reuse the saved calibration, sweep the lids only if
+    // nothing is stored (first boot) or the stored values are unusable
+    if (loadPotCalibration() && lid1Pot.valid && lid2Pot.valid)
+    {
+        Serial.println("Using stored lid pot calibration");
+    }
+    else
+    {
+        calibrateLids();
+        savePotCalibration();
+        // calibrateLids() leaves both servos attached; checkLid() detaches
+        // them once the idle timeout (lidTimeout) has elapsed
+        lidMotion.attached = true;
+        lid2Motion.attached = true;
+    }
+
     // Init BLE
     NimBLEDevice::init("Beacon-scanner");
     pBLEScan = BLEDevice::getScan();
@@ -745,6 +836,7 @@ void everyPeriod(const unsigned int period)
     {
         checkWiFiAndPrint();
         checkLid(now);
+        checkLidPosition();
         checkLastSeen(now);
         lastExecution = now;
     }
