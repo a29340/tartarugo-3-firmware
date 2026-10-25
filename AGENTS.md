@@ -47,6 +47,7 @@ Servo angle 0 = open, 180 = closed; servos are attached only while moving / rece
 - **Feeding** (`feedAmount`/`updateStepper`): stepper runs a multi-leg pattern `{-250, 0, -250, 0, <amount>}`; only the last leg carries the amount. `updateStepper()` is called every loop.
 - **Schedule** (`runSchedule`): time-based entries, either a feeding (opens lid 2, feeds, saves) or a lid 2 open/close. Matches on `tm_sec == 0`, so it depends on `loop()` hitting that exact second.
 - **Health**: `healthCounter` increments every 500ms tick and is reset by a `/api/status/prometheus` scrape; at 100 it reboots (`checkHealth` — currently commented out in `everyPeriod`).
+- **Daily reboot**: `checkScheduledReboot()` (called from `loop()`) reboots the device at a hardcoded local time (`scheduledRebootHour`/`scheduledRebootMinute` in main.cpp, currently 14:00). Fires at most once per day, guarded by `lastScheduledReboot`; only runs once NTP time is set (`timeIsSet`).
 - **Time**: NTP via `pool.ntp.org`, hardcoded GMT+1 / DST+1 (`gmtOffset_sec`, `daylightOffset_sec`).
 
 ## HTTP API

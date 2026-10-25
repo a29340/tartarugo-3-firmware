@@ -30,6 +30,11 @@ const char* ntpServer = "pool.ntp.org";
 constexpr long gmtOffset_sec = 3600; // adjust to your timezone
 constexpr int daylightOffset_sec = 3600; // adjust for DST
 
+// Daily scheduled reboot (local time)
+constexpr uint8_t scheduledRebootHour = 14;
+constexpr uint8_t scheduledRebootMinute = 0;
+time_t lastScheduledReboot = 0;
+
 // WiFi and server config
 
 bool isConnected = false;
@@ -782,6 +787,38 @@ void runSchedule()
 }
 
 
+void checkScheduledReboot()
+{
+    if (!timeIsSet)
+    {
+        return;
+    }
+    tm nowTm;
+    if (!getLocalTime(&nowTm))
+    {
+        return;
+    }
+    if (nowTm.tm_hour != scheduledRebootHour ||
+        nowTm.tm_min != scheduledRebootMinute)
+    {
+        return;
+    }
+    tm dayStart = nowTm;
+    dayStart.tm_hour = 0;
+    dayStart.tm_min = 0;
+    dayStart.tm_sec = 0;
+    const time_t today = mktime(&dayStart);
+    if (today == lastScheduledReboot)
+    {
+        return;
+    }
+    lastScheduledReboot = today;
+    Serial.printf("Scheduled reboot at %02d:%02d\n", scheduledRebootHour,
+                  scheduledRebootMinute);
+    logEvent("Scheduled daily reboot");
+    ESP.restart();
+}
+
 void loop()
 {
     everyPeriod(500);
@@ -794,6 +831,9 @@ void loop()
 
     // Check schedule
     runSchedule();
+
+    // Daily scheduled reboot
+    checkScheduledReboot();
 
     // MQTT: reconnect if needed, process traffic, periodic state publish
     mqttUpdate();
