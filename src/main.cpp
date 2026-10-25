@@ -43,6 +43,8 @@ unsigned long lastExecution = 0;
 unsigned long lastExecution5s = 0;
 int8_t healthCounter = 0;
 
+const uint8_t lidTimeout = 3000;
+
 const char* wifiStatusName[] = {
     "WL_IDLE_STATUS", "WL_NO_SSID_AVAIL",
     "WL_SCAN_COMPLETED", "WL_CONNECTED",
@@ -692,7 +694,7 @@ void checkLid(const unsigned long now)
         const bool targetCatIsNotClose = targetBiggerRSSI < closeBeaconThresholdRSSI;
         const bool anotherCatIsCloserThanTarget = otherCatBiggerRSSI > openBeaconThresholdRSSI && otherCatBiggerRSSI >
             targetBiggerRSSI;
-        if ((targetCatIsNotClose || anotherCatIsCloserThanTarget) && now - lastOpen >= 3000)
+        if ((targetCatIsNotClose || anotherCatIsCloserThanTarget) && now - lastOpen >= lidTimeout)
         {
             if (lidOpen)
             {
@@ -714,12 +716,12 @@ void checkLid(const unsigned long now)
     }
 
 
-    if (now - lastClosed > 3000 && now - lastOpen > 3000 && lidMotion.attached) {
+    if (now - lastClosed > lidTimeout && now - lastOpen > lidTimeout && lidMotion.attached) {
         lidMotion.servo->detach();
         lidMotion.attached = false;
     }
 
-    if (now - lastLid2Closed > 3000 && now - lastLid2Open > 3000 && lid2Motion.attached ) {
+    if (now - lastLid2Closed > lidTimeout && now - lastLid2Open > lidTimeout && lid2Motion.attached ) {
         lid2Motion.servo->detach();
         lid2Motion.attached = false;
     }
