@@ -197,6 +197,26 @@ void mqttPublishDiscovery()
     mqttSendConfig("number", uid, d);
 
     d.clear();
+    snprintf(uid, sizeof(uid), "tartarugo_%s_lid1_position", mqttMacNoColon);
+    d["name"] = "Lid 1 position";
+    d["unique_id"] = uid;
+    d["state_topic"] = mqttStateTopic;
+    d["value_template"] = "{{ value_json.lid1Position }}";
+    d["unit_of_measurement"] = "deg";
+    addCommon(d);
+    mqttSendConfig("sensor", uid, d);
+
+    d.clear();
+    snprintf(uid, sizeof(uid), "tartarugo_%s_lid2_position", mqttMacNoColon);
+    d["name"] = "Lid 2 position";
+    d["unique_id"] = uid;
+    d["state_topic"] = mqttStateTopic;
+    d["value_template"] = "{{ value_json.lid2Position }}";
+    d["unit_of_measurement"] = "deg";
+    addCommon(d);
+    mqttSendConfig("sensor", uid, d);
+
+    d.clear();
     snprintf(uid, sizeof(uid), "tartarugo_%s_wifi_rssi", mqttMacNoColon);
     d["name"] = "WiFi RSSI";
     d["unique_id"] = uid;
@@ -376,6 +396,8 @@ void mqttPublishState()
     JsonDocument doc;
     doc["lid1"] = lidOverride ? (lidOpen ? "open" : "close") : "auto";
     doc["lid2"] = lid2Open ? "open" : "close";
+    doc["lid1Position"] = estimateLid1Angle();
+    doc["lid2Position"] = estimateLid2Angle();
     doc["wifiRssi"] = WiFi.RSSI();
     doc["openThreshold"] = openBeaconThresholdRSSI;
     doc["closeThreshold"] = closeBeaconThresholdRSSI;

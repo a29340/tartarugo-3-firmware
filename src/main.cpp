@@ -43,7 +43,7 @@ unsigned long lastExecution = 0;
 unsigned long lastExecution5s = 0;
 int8_t healthCounter = 0;
 
-const uint8_t lidTimeout = 3000;
+const unsigned long lidTimeout = 3000;
 
 const char* wifiStatusName[] = {
     "WL_IDLE_STATUS", "WL_NO_SSID_AVAIL",
@@ -210,6 +210,9 @@ String getStatus()
     status["isLidOpen"] = lidOpen;
     status["isLid2Open"] = lid2Open;
     status["isAutoMode"] = !lidOverride;
+    // estimated arm angle from the pot (-1 = position feedback unavailable)
+    status["lid1Position"] = estimateLid1Angle();
+    status["lid2Position"] = estimateLid2Angle();
     status["lastFeedTime"] =
         lastFeedAmount == 0 ? "never" : printDateTime(&lastFeedTime).c_str();
     status["lastFeedAmount"] = lastFeedAmount;
@@ -252,6 +255,16 @@ String getStatusProm()
         "# HELP feeder_lid2_open indicates if the second lid is open or not\n# "
         "TYPE feeder_lid2_open gauge\n");
     out = out + String("feeder_lid2_open " + String(lid2Open) + "\n");
+    out = out + String(
+        "# HELP feeder_lid1_position estimated lid 1 arm position in degrees "
+        "(-1 unknown)\n# TYPE feeder_lid1_position gauge\n");
+    out = out + String("feeder_lid1_position " +
+                       String(estimateLid1Angle()) + "\n");
+    out = out + String(
+        "# HELP feeder_lid2_position estimated lid 2 arm position in degrees "
+        "(-1 unknown)\n# TYPE feeder_lid2_position gauge\n");
+    out = out + String("feeder_lid2_position " +
+                       String(estimateLid2Angle()) + "\n");
     out = out + String(
         "# HELP feeder_threshold open or close rssi threshold\n# "
         "TYPE feeder_threshold gauge\n");
@@ -560,6 +573,9 @@ void setup()
 
     setupMotors();
 
+    // Drive both lids to their extremes and calibrate the position pots
+    calibrateLids();
+
     // Init BLE
     NimBLEDevice::init("Beacon-scanner");
     pBLEScan = BLEDevice::getScan();
@@ -745,6 +761,7 @@ void everyPeriod(const unsigned int period)
     {
         checkWiFiAndPrint();
         checkLid(now);
+        checkLidPosition();
         checkLastSeen(now);
         lastExecution = now;
     }

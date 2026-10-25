@@ -37,13 +37,16 @@ There is no test suite. Verify changes by building, flashing, and exercising the
 | 15 | Lid 1 servo (dry food lid)                        |
 | 4  | Lid 2 servo (wet food chute)                      |
 | 13, 12, 14, 27 | Stepper, FULL4WIRE (wired 13→1, 14→2, 12→3, 27→4) |
+| 32 | Lid 1 pot position feedback (ADC1, wiper via voltage divider < 3.3V) |
+| 33 | Lid 2 pot position feedback (ADC1, wiper via voltage divider < 3.3V) |
 
-Servo angle 0 = open, 180 = closed; servos are attached only while moving / recently active and detached ~10s after closing (see `checkLid`).
+Servo angles per lid: lid 1 open = 0° / closed = 100°, lid 2 open = 180° / closed = 55° (constants `LID*_OPEN_ANGLE`/`LID*_CLOSED_ANGLE` in motor-utils.h). Servos are attached only while moving / recently active and detached ~10s after closing (see `checkLid`).
 
 ## How it works
 
 - **Cat detection**: continuous NimBLE scan (main.cpp `scanCallbacks`). Each configured cat has a MAC; RSSI is smoothed over an 8-sample ring buffer (`averageRSSI`, guarded by `rssiMux`). Cats not seen for 3s decay toward -99 (`checkLastSeen`).
 - **Auto lid logic** (`checkLid`, runs every 500ms via `everyPeriod`): a cat with `canFeed=true` above `openBeaconThresholdRSSI` (default -60) opens lid 1; below `closeBeaconThresholdRSSI` (default -73) it closes. A non-`canFeed` cat closer than the target also forces closed (anti-snatching). Manual API lid calls set `lidOverride`, disabling auto mode until `/api/lid/auto` is called.
+- **Lid position feedback**: each servo's internal potentiometer wiper is wired to an ADC pin (32/33, through a voltage divider). `calibrateLids()` (in `setup()`, blocking ~6s) drives each lid to both extremes at every boot and stores the ADC readings (`lid1Pot`/`lid2Pot`); lids end closed. `estimateLidAngle()` maps ADC → degrees (clamped, -1 if uncalibrated/broken wire, which falls back to the old assumed-position behavior). `openLid`/`closeLid` start smooth moves from the *estimated* angle, so a manually moved lid no longer jumps. `checkLidPosition()` (every 500ms, auto **and** override mode) compares the pot against the commanded state and re-moves the lid if off by more than `LID_POSITION_TOLERANCE_DEG` (15°).
 - **Feeding** (`feedAmount`/`updateStepper`): stepper runs a multi-leg pattern `{-250, 0, -250, 0, <amount>}`; only the last leg carries the amount. `updateStepper()` is called every loop.
 - **Schedule** (`runSchedule`): time-based entries, either a feeding (opens lid 2, feeds, saves) or a lid 2 open/close. Matches on `tm_sec == 0`, so it depends on `loop()` hitting that exact second.
 - **Health**: `healthCounter` increments every 500ms tick and is reset by a `/api/status/prometheus` scrape; at 100 it reboots (`checkHealth` — currently commented out in `everyPeriod`).
@@ -64,7 +67,7 @@ Topics (prefix `tartarugo/<mac>`, where `<mac>` is the device MAC without colons
 
 | Topic | Direction | Payload |
 |---|---|---|
-| `state` | publish | JSON: `lid1` (`auto`/`open`/`close`), `lid2` (`open`/`close`), `wifiRssi`, `openThreshold`, `closeThreshold`, `feedAmount`, `lastFeedTime`, `lastFeedAmount`, `cats[]` (each: `name`, `mac`, `rssi`, `canFeed`, `lastSeen`) |
+| `state` | publish | JSON: `lid1` (`auto`/`open`/`close`), `lid2` (`open`/`close`), `lid1Position` (deg, -1 unknown), `lid2Position` (deg, -1 unknown), `wifiRssi`, `openThreshold`, `closeThreshold`, `feedAmount`, `lastFeedTime`, `lastFeedAmount`, `cats[]` (each: `name`, `mac`, `rssi`, `canFeed`, `lastSeen`) |
 | `status` | publish (retained + LWT) | `online` / `offline` — entity availability |
 | `cmd/lid1` | subscribe | `auto` / `open` / `close` |
 | `cmd/lid2` | subscribe | `open` / `close` (never auto-controlled) |
@@ -72,7 +75,7 @@ Topics (prefix `tartarugo/<mac>`, where `<mac>` is the device MAC without colons
 | `cmd/feed_now` | subscribe | `PRESS` (HA button) → feed with the stored amount |
 | `cmd/threshold_open` / `cmd/threshold_close` | subscribe | integer RSSI, clamped to -100..0, persisted via `saveSettings` |
 
-HA entities created by discovery: selects `Lid 1`/`Lid 2`, numbers `Feed amount` (sets the persisted feed amount) and the two RSSI thresholds, a `Feed` button (feeds with the stored amount), sensors WiFi RSSI / Last feed (timestamp) / Last feed amount / Status (full JSON as attributes).
+HA entities created by discovery: selects `Lid 1`/`Lid 2`, numbers `Feed amount` (sets the persisted feed amount) and the two RSSI thresholds, a `Feed` button (feeds with the stored amount), sensors WiFi RSSI / Last feed (timestamp) / Last feed amount / Lid 1 position / Lid 2 position (deg, from the pot) / Status (full JSON as attributes).
 
 Per-cat RSSI: one `RSSI <name>` sensor (dBm, `signal_strength`) is discovered per configured cat, `unique_id` `tartarugo_<mac>_cat_<catmac>`, value pulled from `cats[]` by MAC. Entities are managed dynamically: when the cat list changes (add/remove/rename via `POST /api/settings`), `mqttUpdate()` re-discovers — new cats get a sensor, removed cats' sensors are deleted by publishing `null` to their config topic.
 

@@ -66,6 +66,8 @@ paths:
                 isLidOpen: false
                 isLid2Open: false
                 isAutoMode: true
+                lid1Position: 100
+                lid2Position: 55
                 lastFeedTime: '2025-03-25T12:00:00'
                 lastFeedAmount: 250
                 lastStartupTime: '2025-03-24T08:15:30'
@@ -86,7 +88,8 @@ paths:
       summary: Get status in Prometheus exposition format
       description: |
         Metrics: `feeder_cat_rssi{name}`, `feeder_wifi_rssi`, `feeder_is_open`,
-        `feeder_lid2_open`, `feeder_threshold{status=open|close}`.
+        `feeder_lid2_open`, `feeder_lid1_position`, `feeder_lid2_position`,
+        `feeder_threshold{status=open|close}`.
 
         Note: the device currently declares the response with
         `Content-Type: application/json` even though the payload is
@@ -106,6 +109,8 @@ paths:
                 feeder_wifi_rssi -55
                 feeder_is_open 0
                 feeder_lid2_open 0
+                feeder_lid1_position 100
+                feeder_lid2_position 55
                 feeder_threshold{status="open"} -60
                 feeder_threshold{status="close"} -73
   /api/lid/open:
@@ -330,6 +335,8 @@ components:
         - isLidOpen
         - isLid2Open
         - isAutoMode
+        - lid1Position
+        - lid2Position
         - lastFeedTime
         - lastFeedAmount
         - lastStartupTime
@@ -347,6 +354,18 @@ components:
         isAutoMode:
           type: boolean
           description: Whether automatic beacon-based lid control is active (false = manual override)
+        lid1Position:
+          type: integer
+          description: |
+            Estimated lid 1 arm position in degrees, read from the servo's
+            internal potentiometer (lid 1: 0 = open, 100 = closed). -1 when
+            position feedback is unavailable.
+        lid2Position:
+          type: integer
+          description: |
+            Estimated lid 2 arm position in degrees, read from the servo's
+            internal potentiometer (lid 2: 180 = open, 55 = closed). -1 when
+            position feedback is unavailable.
         lastFeedTime:
           type: string
           description: Local time of the last feed ("never" if the feeder has not fed yet)
