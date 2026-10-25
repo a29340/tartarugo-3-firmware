@@ -160,6 +160,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Status'
+  /api/calibrate:
+    post:
+      tags: [lid]
+      summary: Recalibrate the lid position pots
+      description: |
+        Drives both lids through their full range and re-saves the
+        potentiometer calibration (blocking, ~6s; both lids end up closed).
+        Returns `409 Conflict` while a lid is moving.
+      operationId: calibrateLids
+      responses:
+        '200':
+          description: New calibration values
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalibrateResponse'
+        '409':
+          description: A lid is currently moving
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/feed:
     post:
       tags: [feed]
@@ -472,6 +494,30 @@ components:
             '24': 'Feeding time! 250'
             '25': '2025-03-25T12:00:00'
             '26': 'Reboot reason=Power on'
+    CalibrateResponse:
+      type: object
+      required: [status, lid1, lid2]
+      properties:
+        status:
+          type: string
+          example: ok
+        lid1:
+          $ref: '#/components/schemas/PotCalibration'
+        lid2:
+          $ref: '#/components/schemas/PotCalibration'
+    PotCalibration:
+      type: object
+      required: [open, closed, valid]
+      properties:
+        open:
+          type: integer
+          description: Potentiometer ADC reading at the fully open position
+        closed:
+          type: integer
+          description: Potentiometer ADC reading at the fully closed position
+        valid:
+          type: boolean
+          description: Whether the open/closed span is large enough to be usable
     Error:
       type: object
       required: [error]

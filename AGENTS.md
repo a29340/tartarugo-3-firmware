@@ -46,7 +46,7 @@ Servo angles per lid: lid 1 open = 0° / closed = 100°, lid 2 open = 180° / cl
 
 - **Cat detection**: continuous NimBLE scan (main.cpp `scanCallbacks`). Each configured cat has a MAC; RSSI is smoothed over an 8-sample ring buffer (`averageRSSI`, guarded by `rssiMux`). Cats not seen for 3s decay toward -99 (`checkLastSeen`).
 - **Auto lid logic** (`checkLid`, runs every 500ms via `everyPeriod`): a cat with `canFeed=true` above `openBeaconThresholdRSSI` (default -60) opens lid 1; below `closeBeaconThresholdRSSI` (default -73) it closes. A non-`canFeed` cat closer than the target also forces closed (anti-snatching). Manual API lid calls set `lidOverride`, disabling auto mode until `/api/lid/auto` is called.
-- **Lid position feedback**: each servo's internal potentiometer wiper is wired to an ADC pin (32/33, through a voltage divider). `calibrateLids()` (in `setup()`, blocking ~6s) drives each lid to both extremes at every boot and stores the ADC readings (`lid1Pot`/`lid2Pot`); lids end closed. `estimateLidAngle()` maps ADC → degrees (clamped, -1 if uncalibrated/broken wire, which falls back to the old assumed-position behavior). `openLid`/`closeLid` start smooth moves from the *estimated* angle, so a manually moved lid no longer jumps. `checkLidPosition()` (every 500ms, auto **and** override mode) compares the pot against the commanded state and re-moves the lid if off by more than `LID_POSITION_TOLERANCE_DEG` (15°).
+- **Lid position feedback**: each servo's internal potentiometer wiper is wired to an ADC pin (32/33, through a voltage divider). Calibration (ADC readings at both extremes, `lid1Pot`/`lid2Pot`) is persisted in NVS (`potCalib`, versioned by `POT_CALIBRATION_BLOB_VERSION`); at boot it is loaded and the lids only sweep both extremes (`calibrateLids()`, blocking ~6s, lids end closed) if no blob is stored or a stored value is invalid. `POST /api/calibrate` re-runs the sweep on demand (409 while a lid is moving). `estimateLidAngle()` maps ADC → degrees (clamped, -1 if uncalibrated/broken wire, which falls back to the old assumed-position behavior). `openLid`/`closeLid` start smooth moves from the *estimated* angle, so a manually moved lid no longer jumps. `checkLidPosition()` (every 500ms, auto **and** override mode) compares the pot against the commanded state and re-moves the lid if off by more than `LID_POSITION_TOLERANCE_DEG` (15°).
 - **Feeding** (`feedAmount`/`updateStepper`): stepper runs a multi-leg pattern `{-250, 0, -250, 0, <amount>}`; only the last leg carries the amount. `updateStepper()` is called every loop.
 - **Schedule** (`runSchedule`): time-based entries, either a feeding (opens lid 2, feeds, saves) or a lid 2 open/close. Matches on `tm_sec == 0`, so it depends on `loop()` hitting that exact second.
 - **Health**: `healthCounter` increments every 500ms tick and is reset by a `/api/status/prometheus` scrape; at 100 it reboots (`checkHealth` — currently commented out in `everyPeriod`).
@@ -55,7 +55,7 @@ Servo angles per lid: lid 1 open = 0° / closed = 100°, lid 2 open = 180° / cl
 
 ## HTTP API
 
-Endpoints (see `openapi.yaml` for full details): `GET /api/status`, `GET /api/status/prometheus` (Prometheus text, but sent with `Content-Type: application/json`), `GET /api/logs`, `POST /api/feed`, `POST /api/schedule`, `GET /api/schedule`, `POST /api/settings`, `GET /api/settings`, `POST /api/lid/open|close|auto` (optional `lid=lid2` param), `GET /openapi`.
+Endpoints (see `openapi.yaml` for full details): `GET /api/status`, `GET /api/status/prometheus` (Prometheus text, but sent with `Content-Type: application/json`), `GET /api/logs`, `POST /api/feed`, `POST /api/schedule`, `GET /api/schedule`, `POST /api/settings`, `GET /api/settings`, `POST /api/lid/open|close|auto` (optional `lid=lid2` param), `POST /api/calibrate`, `GET /openapi`.
 
 **When adding/changing an endpoint: update `openapi.yaml` in the same change.** It is compiled into the firmware and served at `/openapi`, so the spec is the contract. Run the redocly lint afterwards.
 
@@ -85,9 +85,9 @@ Multi-device: MQTT client ID (`tartarugo-<mac>`), all topics, HA device identifi
 
 ## Persistence (ESP NVS via `Preferences`)
 
-- Namespace `catfeeder`: last feed time/amount, schedule blob, cat list, RSSI thresholds. All NVS access is wrapped in `xSemaphoreTake/Give(nvsMutex)`.
+- Namespace `catfeeder`: last feed time/amount, schedule blob, cat list, RSSI thresholds, lid pot calibration blob. All NVS access is wrapped in `xSemaphoreTake/Give(nvsMutex)`.
 - Namespace `logs`: circular buffer of 50 events (`MAX_LOGS`), written by `logEvent` (reboot reason, startup time, ...), read by `GET /api/logs`.
-- **Schedule blobs are versioned**: if you change the `ScheduleItem` layout, bump `SCHEDULE_BLOB_VERSION` in `time-utils.h` so old blobs are discarded on load.
+- **Blobs are versioned**: if you change the `ScheduleItem` layout, bump `SCHEDULE_BLOB_VERSION` in `time-utils.h`; if you change `LidPotCalibration`/`PotCalibrationBlob`, bump `POT_CALIBRATION_BLOB_VERSION` in `motor-utils.h` — so old blobs are discarded on load (the pot one triggers a recalibration sweep at boot).
 
 ## Conventions
 

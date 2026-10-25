@@ -53,6 +53,16 @@ struct LidPotCalibration
 LidPotCalibration lid1Pot;
 LidPotCalibration lid2Pot;
 
+// bump when the persisted calibration blob layout changes (old NVS blobs are discarded)
+constexpr uint8_t POT_CALIBRATION_BLOB_VERSION = 1;
+
+struct PotCalibrationBlob
+{
+    uint8_t version;
+    LidPotCalibration lid1;
+    LidPotCalibration lid2;
+};
+
 int readPot(const int pin)
 {
     long sum = 0;
