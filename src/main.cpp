@@ -575,6 +575,10 @@ void setup()
 
     // Drive both lids to their extremes and calibrate the position pots
     calibrateLids();
+    // calibrateLids() leaves both servos attached; checkLid() detaches them
+    // once the idle timeout (lidTimeout) has elapsed
+    lidMotion.attached = true;
+    lid2Motion.attached = true;
 
     // Init BLE
     NimBLEDevice::init("Beacon-scanner");
