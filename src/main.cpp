@@ -687,8 +687,7 @@ void checkLid(const unsigned long now)
         const bool targetCatIsNotClose = targetBiggerRSSI < closeBeaconThresholdRSSI;
         const bool anotherCatIsCloserThanTarget = otherCatBiggerRSSI > openBeaconThresholdRSSI && otherCatBiggerRSSI >
             targetBiggerRSSI;
-        if ((targetCatIsNotClose || anotherCatIsCloserThanTarget) &&
-            now - lastOpen >= 3000)
+        if ((targetCatIsNotClose || anotherCatIsCloserThanTarget) && now - lastOpen >= 3000)
         {
             if (lidOpen)
             {
@@ -701,13 +700,11 @@ void checkLid(const unsigned long now)
                     // lastClosed = now;
                 }
             }
-            return;
         }
 
         if (targetCatIsClose && !anotherCatIsCloserThanTarget && !lidOpen)
         {
             openLid(LID_1);
-            return;
         }
     }
 
