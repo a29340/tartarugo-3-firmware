@@ -43,7 +43,7 @@ unsigned long lastExecution = 0;
 unsigned long lastExecution5s = 0;
 int8_t healthCounter = 0;
 
-const uint8_t lidTimeout = 3000;
+const unsigned long lidTimeout = 3000;
 
 const char* wifiStatusName[] = {
     "WL_IDLE_STATUS", "WL_NO_SSID_AVAIL",
