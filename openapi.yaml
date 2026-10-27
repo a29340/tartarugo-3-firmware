@@ -163,25 +163,20 @@ paths:
   /api/calibrate:
     post:
       tags: [lid]
-      summary: Recalibrate the lid position pots
+      summary: Reset the lid position pot calibration
       description: |
-        Drives both lids through their full range and re-saves the
-        potentiometer calibration (blocking, ~6s; both lids end up closed).
-        Returns `409 Conflict` while a lid is moving.
-      operationId: calibrateLids
+        Clears the stored potentiometer calibration (in memory and in
+        persistent storage). The device runs the calibration sweep again at
+        the next reboot; position feedback falls back to the assumed
+        position until then.
+      operationId: resetLidCalibration
       responses:
         '200':
-          description: New calibration values
+          description: Calibration reset
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CalibrateResponse'
-        '409':
-          description: A lid is currently moving
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
   /api/feed:
     post:
       tags: [feed]
@@ -496,28 +491,15 @@ components:
             '26': 'Reboot reason=Power on'
     CalibrateResponse:
       type: object
-      required: [status, lid1, lid2]
+      required: [status, recalibrateOnReboot]
       properties:
         status:
           type: string
           example: ok
-        lid1:
-          $ref: '#/components/schemas/PotCalibration'
-        lid2:
-          $ref: '#/components/schemas/PotCalibration'
-    PotCalibration:
-      type: object
-      required: [open, closed, valid]
-      properties:
-        open:
-          type: integer
-          description: Potentiometer ADC reading at the fully open position
-        closed:
-          type: integer
-          description: Potentiometer ADC reading at the fully closed position
-        valid:
+        recalibrateOnReboot:
           type: boolean
-          description: Whether the open/closed span is large enough to be usable
+          description: The calibration sweep will run again at the next reboot
+          example: true
     Error:
       type: object
       required: [error]

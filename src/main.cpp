@@ -212,6 +212,17 @@ bool loadPotCalibration()
     return true;
 }
 
+void clearPotCalibration()
+{
+    xSemaphoreTake(nvsMutex, portMAX_DELAY);
+    prefs.begin("catfeeder", false);
+    prefs.remove("potCalib");
+    prefs.end();
+    xSemaphoreGive(nvsMutex);
+    lid1Pot = LidPotCalibration();
+    lid2Pot = LidPotCalibration();
+}
+
 
 int averageRSSI(int ci, int rssi)
 {
@@ -401,28 +412,13 @@ void initialiseWebServer()
     });
     server.on("/api/calibrate", HTTP_POST, [](AsyncWebServerRequest* request)
     {
-        if (lidMotion.active || lid2Motion.active)
-        {
-            request->send(409, "application/json",
-                          "{\"error\":\"A lid is moving, try again later\"}");
-            return;
-        }
-        Serial.println("Recalibrating lid pots...");
-        calibrateLids();
-        savePotCalibration();
-        lidMotion.attached = true;
-        lid2Motion.attached = true;
+        clearPotCalibration();
+        Serial.println("Lid pot calibration cleared - will recalibrate on next reboot");
+        logEvent("Lid pot calibration cleared, will recalibrate on next reboot");
         JsonDocument doc;
         const JsonObject root = doc.to<JsonObject>();
         root["status"] = "ok";
-        const JsonObject lid1Json = root["lid1"].to<JsonObject>();
-        lid1Json["open"] = lid1Pot.potOpen;
-        lid1Json["closed"] = lid1Pot.potClosed;
-        lid1Json["valid"] = lid1Pot.valid;
-        const JsonObject lid2Json = root["lid2"].to<JsonObject>();
-        lid2Json["open"] = lid2Pot.potOpen;
-        lid2Json["closed"] = lid2Pot.potClosed;
-        lid2Json["valid"] = lid2Pot.valid;
+        root["recalibrateOnReboot"] = true;
         String out;
         serializeJson(doc, out);
         mqttPublishState();
