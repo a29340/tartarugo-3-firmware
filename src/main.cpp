@@ -30,11 +30,6 @@ const char* ntpServer = "pool.ntp.org";
 constexpr long gmtOffset_sec = 3600; // adjust to your timezone
 constexpr int daylightOffset_sec = 3600; // adjust for DST
 
-// Daily scheduled reboot (local time)
-constexpr uint8_t scheduledRebootHour = 14;
-constexpr uint8_t scheduledRebootMinute = 0;
-time_t lastScheduledReboot = 0;
-
 // WiFi and server config
 
 bool isConnected = false;
@@ -473,6 +468,7 @@ void initialiseWebServer()
                 schedule[i].amount = arr[i]["amount"] | 0;
                 schedule[i].isLid2 = arr[i]["isLid2"] | false;
                 schedule[i].lid2Open = arr[i]["lid2Open"] | true;
+                schedule[i].isReboot = arr[i]["isReboot"] | false;
             }
             saveScheduleBlob();
             request->send(201, "application/json", "{\"status\":\"ok\"}");
@@ -524,6 +520,7 @@ void initialiseWebServer()
             obj["amount"] = schedule[i].amount;
             obj["isLid2"] = schedule[i].isLid2;
             obj["lid2Open"] = schedule[i].lid2Open;
+            obj["isReboot"] = schedule[i].isReboot;
         }
         String response;
         serializeJson(doc, response);
@@ -587,7 +584,12 @@ void loadSettings()
     }
     for (int i = 0; i < scheduleSize; i++)
     {
-        if (schedule[i].isLid2)
+        if (schedule[i].isReboot)
+        {
+            Serial.printf("Scheduled reboot: %d:%d\n",
+                          schedule[i].hour, schedule[i].minute);
+        }
+        else if (schedule[i].isLid2)
         {
             Serial.printf("Scheduled lid2 %s: %d:%d\n",
                           schedule[i].lid2Open ? "open" : "close",
@@ -781,19 +783,9 @@ void checkLid(const unsigned long now)
         const bool targetCatIsNotClose = targetBiggerRSSI < closeBeaconThresholdRSSI;
         const bool anotherCatIsCloserThanTarget = otherCatBiggerRSSI > openBeaconThresholdRSSI && otherCatBiggerRSSI >
             targetBiggerRSSI;
-        if ((targetCatIsNotClose || anotherCatIsCloserThanTarget) && now - lastOpen >= lidTimeout)
+        if ((targetCatIsNotClose || anotherCatIsCloserThanTarget) && now - lastOpen >= lidTimeout && lidOpen) 
         {
-            if (lidOpen)
-            {
-                closeLid(LID_1);
-            } else
-            {
-                if (anotherCatIsCloserThanTarget)
-                {
-                    // keepClosed();
-                    // lastClosed = now;
-                }
-            }
+            closeLid(LID_1);
         }
 
         if (targetCatIsClose && !anotherCatIsCloserThanTarget && !lidOpen)
@@ -848,7 +840,14 @@ void runSchedule()
             if (schedule[i].hour == nowTm.tm_hour &&
                 schedule[i].minute == nowTm.tm_min && nowTm.tm_sec == 0)
             {
-                if (schedule[i].isLid2)
+                if (schedule[i].isReboot)
+                {
+                    Serial.printf("Scheduled reboot at %02d:%02d\n",
+                                  schedule[i].hour, schedule[i].minute);
+                    logEvent("Scheduled reboot");
+                    ESP.restart();
+                }
+                else if (schedule[i].isLid2)
                 {
                     if (schedule[i].lid2Open)
                     {
@@ -877,38 +876,6 @@ void runSchedule()
 }
 
 
-void checkScheduledReboot()
-{
-    if (!timeIsSet)
-    {
-        return;
-    }
-    tm nowTm;
-    if (!getLocalTime(&nowTm))
-    {
-        return;
-    }
-    if (nowTm.tm_hour != scheduledRebootHour ||
-        nowTm.tm_min != scheduledRebootMinute)
-    {
-        return;
-    }
-    tm dayStart = nowTm;
-    dayStart.tm_hour = 0;
-    dayStart.tm_min = 0;
-    dayStart.tm_sec = 0;
-    const time_t today = mktime(&dayStart);
-    if (today == lastScheduledReboot)
-    {
-        return;
-    }
-    lastScheduledReboot = today;
-    Serial.printf("Scheduled reboot at %02d:%02d\n", scheduledRebootHour,
-                  scheduledRebootMinute);
-    logEvent("Scheduled daily reboot");
-    ESP.restart();
-}
-
 void loop()
 {
     everyPeriod(500);
@@ -921,9 +888,6 @@ void loop()
 
     // Check schedule
     runSchedule();
-
-    // Daily scheduled reboot
-    checkScheduledReboot();
 
     // MQTT: reconnect if needed, process traffic, periodic state publish
     mqttUpdate();

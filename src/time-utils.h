@@ -12,10 +12,11 @@ struct ScheduleItem
     uint16_t amount;
     bool isLid2;
     bool lid2Open;
+    bool isReboot;
 };
 
 // bump when ScheduleItem layout changes (old NVS blobs become invalid)
-constexpr uint8_t SCHEDULE_BLOB_VERSION = 1;
+constexpr uint8_t SCHEDULE_BLOB_VERSION = 2;
 
 String printDateTime(const tm* dateTime)
 {

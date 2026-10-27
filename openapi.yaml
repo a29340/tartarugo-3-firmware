@@ -30,7 +30,7 @@ tags:
   - name: feed
     description: Manual feeding
   - name: schedule
-    description: Scheduled feeding / lid events
+    description: Scheduled feeding / lid / reboot events
   - name: settings
     description: Feeder configuration
   - name: logs
@@ -221,18 +221,29 @@ paths:
                   amount: 250
                   isLid2: false
                   lid2Open: true
+                  isReboot: false
                 - hour: 8
                   minute: 0
                   amount: 0
                   isLid2: true
                   lid2Open: true
+                  isReboot: false
+                - hour: 15
+                  minute: 30
+                  amount: 0
+                  isLid2: false
+                  lid2Open: false
+                  isReboot: true
     post:
       tags: [schedule]
       summary: Replace the schedule
       description: |
         Replaces the whole schedule. At most the first 10 entries are stored.
-        Each entry is a feeding event (`isLid2: false`, dispenses `amount`) or
-        a lid-2 open/close event (`isLid2: true`, `lid2Open` selects the action).
+        Each entry is a feeding event (`isReboot: false`, `isLid2: false`,
+        dispenses `amount`), a lid-2 open/close event (`isReboot: false`,
+        `isLid2: true`, `lid2Open` selects the action), or a scheduled
+        reboot (`isReboot: true`, the device restarts at that time; `amount`,
+        `isLid2` and `lid2Open` are ignored).
       operationId: setSchedule
       requestBody:
         required: true
@@ -249,6 +260,13 @@ paths:
                 amount: 250
                 isLid2: false
                 lid2Open: true
+                isReboot: false
+              - hour: 15
+                minute: 30
+                amount: 0
+                isLid2: false
+                lid2Open: false
+                isReboot: true
       responses:
         '201':
           description: Schedule stored
@@ -419,7 +437,7 @@ components:
           description: Milliseconds since boot when the beacon was last seen
     ScheduleItem:
       type: object
-      required: [hour, minute, amount, isLid2, lid2Open]
+      required: [hour, minute, amount, isLid2, lid2Open, isReboot]
       properties:
         hour:
           type: integer
@@ -433,13 +451,16 @@ components:
           type: integer
           minimum: 0
           maximum: 65535
-          description: Stepper steps to dispense (ignored when `isLid2` is true)
+          description: Stepper steps to dispense (ignored when `isLid2` or `isReboot` is true)
         isLid2:
           type: boolean
-          description: Whether this entry controls lid 2 instead of feeding
+          description: Whether this entry controls lid 2 instead of feeding (ignored when `isReboot` is true)
         lid2Open:
           type: boolean
           description: 'For isLid2 entries: open (true) or close (false) lid 2'
+        isReboot:
+          type: boolean
+          description: Whether this entry reboots the device at that time (hour/minute only)
     Settings:
       type: object
       required:
