@@ -25,7 +25,7 @@ constexpr int SERVO_DURATION_TOLERANCE_MS = 4000;
 
 // Per-lid target angles (degrees)
 constexpr int LID1_OPEN_ANGLE = 0;
-constexpr int LID1_CLOSED_ANGLE = 100;
+constexpr int LID1_CLOSED_ANGLE = 130;
 constexpr int LID2_OPEN_ANGLE = 180;
 constexpr int LID2_CLOSED_ANGLE = 55;
 constexpr int SERVO_MOVE_STEPS = 50;
