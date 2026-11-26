@@ -19,7 +19,7 @@ info:
       beacon-based control.
 servers:
   - url: http://feeder.local
-    description: Replace with the feeder's IP address or hostname (port 80)
+    description: Replace with the feeder's mDNS hostname (e.g. `tartarugo-milo.local`) or its IP address (port 80)
 tags:
   - name: meta
     description: API description
@@ -295,6 +295,7 @@ paths:
               example:
                 openBeaconThresholdRSSI: -60
                 closeBeaconThresholdRSSI: -73
+                hostname: tartarugo
                 cats:
                   - name: Nina
                     mac: c2:e9:b3:bf:3c:33
@@ -307,7 +308,8 @@ paths:
       summary: Replace settings
       description: |
         Replaces the whole settings object. At most 5 cats are stored. Missing
-        RSSI thresholds keep their previous values.
+        RSSI thresholds keep their previous values. The `hostname` field is
+        only reported, not accepted here — change it with `POST /api/hostname`.
       operationId: setSettings
       requestBody:
         required: true
@@ -331,6 +333,39 @@ paths:
                 $ref: '#/components/schemas/OkResponse'
         '400':
           description: Malformed JSON body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/hostname:
+    post:
+      tags: [settings]
+      summary: Set the mDNS hostname
+      description: |
+        Sets the mDNS hostname (without the `.local` suffix). The value is
+        persisted, sanitized to a valid DNS label (lowercase alphanumerics
+        and hyphens, max 63 chars), and applied immediately: the device
+        re-registers as `<hostname>.local`. The current hostname is also
+        reported by `GET /api/settings`.
+      operationId: setHostname
+      parameters:
+        - name: hostname
+          in: query
+          required: true
+          description: New mDNS hostname, without the `.local` suffix
+          schema:
+            type: string
+            maxLength: 63
+          example: tartarugo-milo
+      responses:
+        '201':
+          description: Hostname stored and mDNS re-registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HostnameResponse'
+        '400':
+          description: Missing or empty `hostname` parameter
           content:
             application/json:
               schema:
@@ -476,6 +511,14 @@ components:
           type: integer
           description: RSSI (dBm) below which the lid closes automatically
           example: -73
+        hostname:
+          type: string
+          description: |
+            mDNS hostname, without the `.local` suffix: the device answers at
+            `http://<hostname>.local` in addition to its IP address.
+            Read-only in this object; change it with `POST /api/hostname`.
+          maxLength: 63
+          example: tartarugo-milo
         cats:
           type: array
           maxItems: 5
@@ -521,6 +564,17 @@ components:
           type: boolean
           description: The calibration sweep will run again at the next reboot
           example: true
+    HostnameResponse:
+      type: object
+      required: [status, hostname]
+      properties:
+        status:
+          type: string
+          example: ok
+        hostname:
+          type: string
+          description: The sanitized hostname now in use (without the `.local` suffix)
+          example: tartarugo-milo
     Error:
       type: object
       required: [error]

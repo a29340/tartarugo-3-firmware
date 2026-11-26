@@ -4,6 +4,7 @@
 #include <AsyncTCP.h>
 #include <ESP32Servo.h>
 #include <ESPAsyncWebServer.h>
+#include <ESPmDNS.h>
 #include <NimBLEAdvertisedDevice.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
@@ -56,6 +57,10 @@ int openBeaconThresholdRSSI = -60;
 int closeBeaconThresholdRSSI = -73;
 // amount used by the HA "Feed amount" number / "Feed" button, persisted in NVS
 int feedAmountSetting = 250;
+
+// mDNS hostname (without the .local suffix), persisted in NVS
+#define MAX_HOSTNAME_LEN 63
+char deviceHostname[MAX_HOSTNAME_LEN + 1] = "Tartarugo";
 
 NimBLEScan* pBLEScan;
 
@@ -170,6 +175,7 @@ void saveSettings()
     prefs.putInt("openBeaconRSSI", openBeaconThresholdRSSI);
     prefs.putInt("closeBeaconRSSI", closeBeaconThresholdRSSI);
     prefs.putInt("feedAmount", feedAmountSetting);
+    prefs.putString("hostname", deviceHostname);
     prefs.end();
     xSemaphoreGive(nvsMutex);
 }
@@ -216,6 +222,49 @@ void clearPotCalibration()
     xSemaphoreGive(nvsMutex);
     lid1Pot = LidPotCalibration();
     lid2Pot = LidPotCalibration();
+}
+
+// mDNS hostnames are DNS labels: lowercase alphanumerics and hyphens,
+// at most 63 chars, no leading or trailing hyphen
+void sanitizeHostname(char* name, size_t nameLen)
+{
+    char tmp[MAX_HOSTNAME_LEN + 1];
+    size_t out = 0;
+    for (size_t i = 0; name[i] != 0 && i < MAX_HOSTNAME_LEN; i++)
+    {
+        char c = name[i];
+        if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+        {
+            tmp[out++] = c;
+        }
+        else if (out > 0)
+        {
+            tmp[out++] = '-';
+        }
+    }
+    while (out > 0 && tmp[out - 1] == '-') out--;
+    if (out == 0)
+    {
+        out = strlcpy(tmp, "tartarugo", sizeof(tmp));
+    }
+    strlcpy(name, tmp, nameLen);
+}
+
+// Register the device on the network as <deviceHostname>.local, answering
+// for the HTTP service on port 80. Called when WiFi connects and again when
+// the hostname setting changes.
+void startMdns()
+{
+    // end() is a no-op when mDNS is not running; begin() re-registers
+    MDNS.end();
+    if (!MDNS.begin(deviceHostname))
+    {
+        Serial.printf("mDNS registration failed for %s\n", deviceHostname);
+        return;
+    }
+    MDNS.addService("http", "tcp", 80);
+    Serial.printf("mDNS started: http://%s.local\n", deviceHostname);
 }
 
 
@@ -533,6 +582,7 @@ void initialiseWebServer()
         JsonObject settings = doc.to<JsonObject>();
         settings["openBeaconThresholdRSSI"] = openBeaconThresholdRSSI;
         settings["closeBeaconThresholdRSSI"] = closeBeaconThresholdRSSI;
+        settings["hostname"] = deviceHostname;
         JsonArray catsJson = settings["cats"].to<JsonArray>();
         for (size_t i = 0; i < catsSize; i++)
         {
@@ -544,6 +594,36 @@ void initialiseWebServer()
         String response;
         serializeJson(doc, response);
         request->send(200, "application/json", response);
+    });
+
+    server.on("/api/hostname", HTTP_POST, [](AsyncWebServerRequest* request)
+    {
+        const AsyncWebParameter* hostnameParam =
+            request->getParam("hostname");
+        if (!hostnameParam || hostnameParam->value().length() == 0)
+        {
+            request->send(400, "application/json",
+                          "{\"error\":\"missing hostname parameter\"}");
+            return;
+        }
+        char nextHostname[MAX_HOSTNAME_LEN + 1];
+        strlcpy(nextHostname, hostnameParam->value().c_str(),
+                sizeof(nextHostname));
+        sanitizeHostname(nextHostname, sizeof(nextHostname));
+        const bool hostnameChanged = strcmp(nextHostname, deviceHostname) != 0;
+        strlcpy(deviceHostname, nextHostname, sizeof(deviceHostname));
+        saveSettings();
+        if (hostnameChanged)
+        {
+            startMdns();
+        }
+        JsonDocument doc;
+        const JsonObject root = doc.to<JsonObject>();
+        root["status"] = "ok";
+        root["hostname"] = deviceHostname;
+        String out;
+        serializeJson(doc, out);
+        request->send(201, "application/json", out);
     });
 
     // Global OPTIONS handler (for preflight requests)
@@ -605,6 +685,11 @@ void loadSettings()
     closeBeaconThresholdRSSI = prefs.getInt("closeBeaconRSSI", closeBeaconThresholdRSSI);
     feedAmountSetting = prefs.getInt("feedAmount", feedAmountSetting);
     Serial.printf("Configured thresholds - open %d - close: %d \n", openBeaconThresholdRSSI, closeBeaconThresholdRSSI);
+
+    // stored hostname, sanitized to a valid mDNS DNS label
+    prefs.getString("hostname", deviceHostname, sizeof(deviceHostname));
+    sanitizeHostname(deviceHostname, sizeof(deviceHostname));
+    Serial.printf("mDNS hostname: %s.local\n", deviceHostname);
 
     const size_t len2 = prefs.getBytes("cats", &cats, CATS_MAX_SIZE * sizeof(CatItem));
     catsSize = len2 / sizeof(CatItem);
@@ -679,6 +764,8 @@ void afterWifiConnected()
 {
     Serial.println("Init Webserver");
     initialiseWebServer();
+    Serial.println("Init mDNS");
+    startMdns();
     Serial.println("Init OTA");
     ArduinoOTA
         .onStart([]()
@@ -742,7 +829,8 @@ void checkWiFiAndPrint()
         if (!isServerInitialized)
         {
             afterWifiConnected();
-            Serial.printf("Address: %s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("Address: %s (http://%s.local)\n",
+                          WiFi.localIP().toString().c_str(), deviceHostname);
         }
         if (!timeIsSet && getLocalTime(&timeinfo))
         {

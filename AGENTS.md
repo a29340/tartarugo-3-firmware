@@ -49,13 +49,14 @@ Servo angles per lid: lid 1 open = 0° / closed = 100°, lid 2 open = 180° / cl
 - **Lid position feedback**: each servo's internal potentiometer wiper is wired to an ADC pin (32/33, through a voltage divider). Calibration (ADC readings at both extremes, `lid1Pot`/`lid2Pot`) is persisted in NVS (`potCalib`, versioned by `POT_CALIBRATION_BLOB_VERSION`); at boot it is loaded and the lids only sweep both extremes (`calibrateLids()`, blocking ~6s, lids end closed) if no blob is stored or a stored value is invalid. `POST /api/calibrate` clears the stored calibration (NVS `potCalib` and the in-memory `lid1Pot`/`lid2Pot`) so the sweep re-runs at the next reboot; position feedback falls back to the assumed position until then. `estimateLidAngle()` maps ADC → degrees (clamped, -1 if uncalibrated/broken wire, which falls back to the old assumed-position behavior). `openLid`/`closeLid` start smooth moves from the *estimated* angle, so a manually moved lid no longer jumps. `checkLidPosition()` (every 500ms, auto **and** override mode) compares the pot against the commanded state and re-moves the lid if off by more than `LID_POSITION_TOLERANCE_DEG` (15°).
 - **Feeding** (`feedAmount`/`updateStepper`): stepper runs a multi-leg pattern `{-250, 0, -250, 0, <amount>}`; only the last leg carries the amount. `updateStepper()` is called every loop.
 - **Schedule** (`runSchedule`): time-based entries — a feeding (opens lid 2, feeds, saves), a lid 2 open/close, or a device reboot (`isReboot: true`, calls `ESP.restart()`). Matches on `tm_sec == 0`, so it depends on `loop()` hitting that exact second. Reboots need no once-per-day guard: the match only fires within the one second where `tm_sec == 0` and the restart is immediate.
+- **mDNS**: once WiFi connects (`afterWifiConnected`), the device registers itself with mDNS as `<hostname>.local` (ESPmDNS) and advertises the HTTP service on port 80, so it can be reached by name in addition to its dynamic IP. The hostname is persisted in NVS (`hostname`) and set with `POST /api/hostname?hostname=...` (reported by `GET /api/settings`); it is sanitized to a valid DNS label (lowercase alphanumerics + hyphens, max 63 chars, default `Tartarugo`). Changing it restarts the mDNS registration immediately.
 - **Health**: `healthCounter` increments every 500ms tick and is reset by a `/api/status/prometheus` scrape; at 100 it reboots (`checkHealth` — currently commented out in `everyPeriod`).
 - **Scheduled reboot**: rebooting is just a schedule entry type (`isReboot: true` in the schedule, configured via `POST /api/schedule`); `runSchedule()` restarts the device at the entry's hour:minute, once NTP time is set (`timeIsSet`). There is no separate hardcoded reboot time anymore.
 - **Time**: NTP via `pool.ntp.org`, hardcoded GMT+1 / DST+1 (`gmtOffset_sec`, `daylightOffset_sec`).
 
 ## HTTP API
 
-Endpoints (see `openapi.yaml` for full details): `GET /api/status`, `GET /api/status/prometheus` (Prometheus text, but sent with `Content-Type: application/json`), `GET /api/logs`, `POST /api/feed`, `POST /api/schedule`, `GET /api/schedule`, `POST /api/settings`, `GET /api/settings`, `POST /api/lid/open|close|auto` (optional `lid=lid2` param), `POST /api/calibrate`, `GET /openapi`.
+Endpoints (see `openapi.yaml` for full details): `GET /api/status`, `GET /api/status/prometheus` (Prometheus text, but sent with `Content-Type: application/json`), `GET /api/logs`, `POST /api/feed`, `POST /api/schedule`, `GET /api/schedule`, `POST /api/settings`, `GET /api/settings`, `POST /api/hostname` (query param `hostname`, sets the mDNS name), `POST /api/lid/open|close|auto` (optional `lid=lid2` param), `POST /api/calibrate`, `GET /openapi`.
 
 **When adding/changing an endpoint: update `openapi.yaml` in the same change.** It is compiled into the firmware and served at `/openapi`, so the spec is the contract. Run the redocly lint afterwards.
 
@@ -85,7 +86,7 @@ Multi-device: MQTT client ID (`tartarugo-<mac>`), all topics, HA device identifi
 
 ## Persistence (ESP NVS via `Preferences`)
 
-- Namespace `catfeeder`: last feed time/amount, schedule blob, cat list, RSSI thresholds, lid pot calibration blob. All NVS access is wrapped in `xSemaphoreTake/Give(nvsMutex)`.
+- Namespace `catfeeder`: last feed time/amount, schedule blob, cat list, RSSI thresholds, lid pot calibration blob, mDNS hostname. All NVS access is wrapped in `xSemaphoreTake/Give(nvsMutex)`.
 - Namespace `logs`: circular buffer of 50 events (`MAX_LOGS`), written by `logEvent` (reboot reason, startup time, ...), read by `GET /api/logs`.
 - **Blobs are versioned**: if you change the `ScheduleItem` layout, bump `SCHEDULE_BLOB_VERSION` in `time-utils.h`; if you change `LidPotCalibration`/`PotCalibrationBlob`, bump `POT_CALIBRATION_BLOB_VERSION` in `motor-utils.h` — so old blobs are discarded on load (the pot one triggers a recalibration sweep at boot).
 
