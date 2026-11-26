@@ -243,6 +243,7 @@ void sanitizeHostname(char* name, size_t nameLen)
             tmp[out++] = '-';
         }
     }
+    tmp[out] = 0; // terminate: strlcpy below scans past the written bytes
     while (out > 0 && tmp[out - 1] == '-') out--;
     if (out == 0)
     {
@@ -829,8 +830,12 @@ void checkWiFiAndPrint()
         if (!isServerInitialized)
         {
             afterWifiConnected();
-            Serial.printf("Address: %s (http://%s.local)\n",
-                          WiFi.localIP().toString().c_str(), deviceHostname);
+            char addressLog[MAX_LOG_LEN];
+            snprintf(addressLog, sizeof(addressLog),
+                     "Address: %s (http://%s.local)",
+                     WiFi.localIP().toString().c_str(), deviceHostname);
+            Serial.println(addressLog);
+            logEvent(addressLog);
         }
         if (!timeIsSet && getLocalTime(&timeinfo))
         {
